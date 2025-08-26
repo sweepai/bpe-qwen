@@ -1,0 +1,22 @@
+[package]
+name = "bpe-qwen"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "bpe_qwen"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22.0", features = ["extension-module"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+unicode-normalization = "0.1"
+base64 = "0.22"
+rayon = "1.10"
+fnv = "1.0"
+
+# Use the local bpe crate from vendor
+bpe = { path = "vendor/rust-gems/crates/bpe", features = ["tiktoken", "rand"] }
