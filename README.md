@@ -154,4 +154,4 @@ python benchmark.py
 
 ---
 
-*Built by [Sweep AI](https://sweep.dev), an AI plugin for JetBrains IDEs*
+*This entire project was written by [Sweep AI](https://sweep.dev), an AI plugin for JetBrains IDEs*
