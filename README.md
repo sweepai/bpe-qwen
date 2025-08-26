@@ -146,10 +146,6 @@ python benchmark.py
 - [ ] Direct tokenizer.json support
 - [ ] WebAssembly bindings for browser usage
 
-## License
-
-MIT License - See LICENSE file for details
-
 ## Acknowledgments
 
 - Built on top of the excellent [rust-gems BPE crate](https://github.com/github/rust-gems)
