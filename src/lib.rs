@@ -2,8 +2,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use serde::Deserialize;
 use std::collections::HashMap;
-use regex::Regex;
+use fancy_regex::Regex;
 use unicode_normalization::UnicodeNormalization;
+use serde_json::Value;
+use std::path::Path;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
 
@@ -73,24 +75,36 @@ struct QwenTokenizer {
 
 #[pymethods]
 impl QwenTokenizer {
-    /// Create a new QwenTokenizer from vocab.json and merges.txt files
+    /// Create a new QwenTokenizer from a directory containing tokenizer files
+    /// 
+    /// Args:
+    ///     dir_path: Directory containing vocab.json, merges.txt, and optionally tokenizer_config.json
+    ///     pretokenize_regex: Optional custom pretokenization regex (defaults to Qwen regex if None)
     #[new]
-    fn new(vocab_path: &str, merges_path: &str) -> PyResult<Self> {
+    #[pyo3(signature = (dir_path, pretokenize_regex=None))]
+    fn new(dir_path: &str, pretokenize_regex: Option<&str>) -> PyResult<Self> {
+        let dir = Path::new(dir_path);
+        
+        // Build paths for required files
+        let vocab_path = dir.join("vocab.json");
+        let merges_path = dir.join("merges.txt");
+        let tokenizer_config_path = dir.join("tokenizer_config.json");
+        
         // Read vocab.json
-        let vocab_content = std::fs::read_to_string(vocab_path)
+        let vocab_content = std::fs::read_to_string(&vocab_path)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(
-                format!("Failed to read vocab file: {}", e)
+                format!("Failed to read vocab file at {:?}: {}", vocab_path, e)
             ))?;
         
-        let vocab: HashMap<String, u32> = serde_json::from_str(&vocab_content)
+        let mut vocab: HashMap<String, u32> = serde_json::from_str(&vocab_content)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 format!("Failed to parse vocab: {}", e)
             ))?;
 
         // Read merges.txt
-        let merges_content = std::fs::read_to_string(merges_path)
+        let merges_content = std::fs::read_to_string(&merges_path)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(
-                format!("Failed to read merges file: {}", e)
+                format!("Failed to read merges file at {:?}: {}", merges_path, e)
             ))?;
 
         // Parse merges (skip header line)
@@ -190,33 +204,62 @@ impl QwenTokenizer {
             Some(hash_factor)
         );
 
-        // Use default pretokenization regex for GPT-style tokenizers
-        let regex_str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
-        let pre_tokenizer_regex = Regex::new(regex_str).ok();
-
-        // Basic special tokens for Qwen
+        // Load special tokens from tokenizer_config.json if provided
         let mut special_tokens = HashMap::new();
         let mut special_token_ids = HashMap::new();
         
-        // Common Qwen special tokens
-        let special_token_strings = vec![
-            "<|endoftext|>", "<|im_start|>", "<|im_end|>",
-            "<|object_ref_start|>", "<|object_ref_end|>",
-            "<|box_start|>", "<|box_end|>",
-            "<|quad_start|>", "<|quad_end|>",
-            "<|vision_start|>", "<|vision_end|>"
-        ];
-        
-        for special_str in special_token_strings {
-            if let Some(&token_id) = vocab.get(special_str) {
-                special_tokens.insert(special_str.to_string(), token_id);
-                special_token_ids.insert(token_id, special_str.to_string());
+        if tokenizer_config_path.exists() {
+            if let Ok(config_content) = std::fs::read_to_string(&tokenizer_config_path) {
+                if let Ok(config_json) = serde_json::from_str::<Value>(&config_content) {
+                    // Load from added_tokens_decoder
+                    if let Some(added_tokens) = config_json.get("added_tokens_decoder").and_then(|v| v.as_object()) {
+                        for (token_id_str, token_info) in added_tokens.iter() {
+                            if let Ok(token_id) = token_id_str.parse::<u32>() {
+                                if let Some(content) = token_info.get("content").and_then(|v| v.as_str()) {
+                                    // Add the special token to our maps
+                                    special_tokens.insert(content.to_string(), token_id);
+                                    special_token_ids.insert(token_id, content.to_string());
+                                    
+                                    // Also add to vocab if not present
+                                    vocab.entry(content.to_string()).or_insert(token_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                println!("Loaded {} special tokens from tokenizer_config.json", special_tokens.len());
+            }
+        } else {
+            // Fallback: try to find common special tokens in vocab
+            let special_token_strings = vec![
+                "<|endoftext|>", "<|im_start|>", "<|im_end|>",
+                "<|object_ref_start|>", "<|object_ref_end|>",
+                "<|box_start|>", "<|box_end|>",
+                "<|quad_start|>", "<|quad_end|>",
+                "<|vision_start|>", "<|vision_end|>",
+                "<|vision_pad|>", "<|image_pad|>", "<|video_pad|>",
+            ];
+            
+            for special_str in special_token_strings {
+                if let Some(&token_id) = vocab.get(special_str) {
+                    special_tokens.insert(special_str.to_string(), token_id);
+                    special_token_ids.insert(token_id, special_str.to_string());
+                }
             }
         }
 
+        // Use custom regex or default to Qwen's pretokenization regex
+        let regex_str = pretokenize_regex.unwrap_or(
+            r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+        );
+        let pre_tokenizer_regex = Regex::new(regex_str)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("Invalid regex pattern: {}", e)
+            ))?;
+
         Ok(QwenTokenizer {
             bpe,
-            pre_tokenizer_regex,
+            pre_tokenizer_regex: Some(pre_tokenizer_regex),
             normalizer_type: Some("NFC".to_string()),
             special_tokens,
             special_token_ids,
@@ -240,22 +283,47 @@ impl QwenTokenizer {
             text.to_string()
         };
 
-        // Handle special tokens
+        // Handle special tokens - find all occurrences and their positions
+        let mut special_token_positions = Vec::new();
         for (special_text, &special_id) in &self.special_tokens {
-            if normalized.contains(special_text) {
-                // Split by special token and encode parts
-                let mut result = Vec::new();
-                let parts: Vec<&str> = normalized.split(special_text).collect();
-                for (i, part) in parts.iter().enumerate() {
+            let mut search_pos = 0;
+            while let Some(pos) = normalized[search_pos..].find(special_text) {
+                let actual_pos = search_pos + pos;
+                special_token_positions.push((actual_pos, special_text.len(), special_id));
+                search_pos = actual_pos + special_text.len();
+            }
+        }
+        
+        // Sort by position
+        special_token_positions.sort_by_key(|&(pos, _, _)| pos);
+        
+        // If we have special tokens, split and encode
+        if !special_token_positions.is_empty() {
+            let mut result = Vec::new();
+            let mut last_end = 0;
+            
+            for (start, len, token_id) in special_token_positions {
+                // Encode text before the special token
+                if start > last_end {
+                    let part = &normalized[last_end..start];
                     if !part.is_empty() {
                         result.extend(self.encode_regular(part)?);
                     }
-                    if i < parts.len() - 1 {
-                        result.push(special_id);
-                    }
                 }
-                return Ok(result);
+                // Add the special token
+                result.push(token_id);
+                last_end = start + len;
             }
+            
+            // Encode any remaining text after the last special token
+            if last_end < normalized.len() {
+                let part = &normalized[last_end..];
+                if !part.is_empty() {
+                    result.extend(self.encode_regular(part)?);
+                }
+            }
+            
+            return Ok(result);
         }
 
         self.encode_regular(&normalized)
@@ -267,7 +335,13 @@ impl QwenTokenizer {
             // Apply pre-tokenization using regex
             let mut all_tokens = Vec::new();
             
-            for mat in regex.find_iter(text) {
+            // fancy_regex returns Results, so we need to handle them
+            let matches: Result<Vec<_>, _> = regex.find_iter(text).collect();
+            let matches = matches.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                format!("Regex matching error: {}", e)
+            ))?;
+            
+            for mat in matches {
                 let piece = mat.as_str();
                 // Convert to bytes for BPE encoding
                 let piece_bytes = piece.as_bytes();
@@ -302,18 +376,27 @@ impl QwenTokenizer {
 
     /// Decode token IDs back to text
     fn decode(&self, tokens: Vec<u32>) -> PyResult<String> {
-        // Map original token IDs to deduplicated indices
-        let mut dedup_tokens = Vec::new();
+        let mut result = String::new();
+        
         for token in tokens {
-            if let Some(&dedup_id) = self.token_id_map.get(&token) {
-                dedup_tokens.push(dedup_id);
+            // Check if it's a special token first
+            if let Some(special_text) = self.special_token_ids.get(&token) {
+                result.push_str(special_text);
+            } else if let Some(&dedup_id) = self.token_id_map.get(&token) {
+                // Map to deduplicated index and decode
+                let bytes = self.bpe.decode_tokens(&[dedup_id]);
+                result.push_str(&String::from_utf8_lossy(&bytes));
             } else {
-                dedup_tokens.push(token);  // Fallback to original if not in map
+                // Try decoding directly (though this might fail for out-of-range tokens)
+                if token < self.bpe.num_tokens() as u32 {
+                    let bytes = self.bpe.decode_tokens(&[token]);
+                    result.push_str(&String::from_utf8_lossy(&bytes));
+                }
+                // If token is completely out of range, skip it
             }
         }
         
-        let bytes = self.bpe.decode_tokens(&dedup_tokens);
-        Ok(String::from_utf8_lossy(&bytes).to_string())
+        Ok(result)
     }
 
     /// Encode text to token IDs and return as bytes
@@ -344,7 +427,13 @@ impl QwenTokenizer {
         let mut count = 0;
         
         if let Some(ref regex) = self.pre_tokenizer_regex {
-            for mat in regex.find_iter(&normalized) {
+            // fancy_regex returns Results, so we need to handle them
+            let matches: Result<Vec<_>, _> = regex.find_iter(&normalized).collect();
+            let matches = matches.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                format!("Regex matching error in count_tokens: {}", e)
+            ))?;
+            
+            for mat in matches {
                 let piece_bytes = mat.as_str().as_bytes();
                 count += self.bpe.count(piece_bytes);
             }

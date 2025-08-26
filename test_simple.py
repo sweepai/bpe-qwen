@@ -10,7 +10,7 @@ print("Testing bpe-qwen tokenizer initialization...")
 
 start_time = time.time()
 try:
-    tokenizer = bpe_qwen.QwenTokenizer("vocab.json", "merges.txt")
+    tokenizer = bpe_qwen.QwenTokenizer("data")
     print(f"✓ Tokenizer loaded in {time.time() - start_time:.2f} seconds")
     print(f"Vocab size: {tokenizer.vocab_size()}")
     

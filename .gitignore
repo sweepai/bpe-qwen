@@ -70,3 +70,6 @@ docs/_build/
 
 # Pyenv
 .python-version
+
+# Data directory with tokenizer files and benchmark results
+data/
