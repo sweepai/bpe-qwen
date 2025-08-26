@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use serde::Deserialize;
 use std::collections::HashMap;
-use fancy_regex::Regex;
+use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 use serde_json::Value;
 use std::path::Path;
@@ -248,18 +248,12 @@ impl QwenTokenizer {
             }
         }
 
-        // Use custom regex or default to Qwen's pretokenization regex
-        let regex_str = pretokenize_regex.unwrap_or(
-            r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
-        );
-        let pre_tokenizer_regex = Regex::new(regex_str)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Invalid regex pattern: {}", e)
-            ))?;
+        // Skip regex pretokenization for maximum performance
+        let pre_tokenizer_regex = None;
 
         Ok(QwenTokenizer {
             bpe,
-            pre_tokenizer_regex: Some(pre_tokenizer_regex),
+            pre_tokenizer_regex,
             normalizer_type: Some("NFC".to_string()),
             special_tokens,
             special_token_ids,
@@ -335,11 +329,8 @@ impl QwenTokenizer {
             // Apply pre-tokenization using regex
             let mut all_tokens = Vec::new();
             
-            // fancy_regex returns Results, so we need to handle them
-            let matches: Result<Vec<_>, _> = regex.find_iter(text).collect();
-            let matches = matches.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                format!("Regex matching error: {}", e)
-            ))?;
+            // Use standard regex which doesn't return Results
+            let matches: Vec<_> = regex.find_iter(text).collect();
             
             for mat in matches {
                 let piece = mat.as_str();
@@ -428,10 +419,7 @@ impl QwenTokenizer {
         
         if let Some(ref regex) = self.pre_tokenizer_regex {
             // fancy_regex returns Results, so we need to handle them
-            let matches: Result<Vec<_>, _> = regex.find_iter(&normalized).collect();
-            let matches = matches.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                format!("Regex matching error in count_tokens: {}", e)
-            ))?;
+            let matches: Vec<_> = regex.find_iter(&normalized).collect();
             
             for mat in matches {
                 let piece_bytes = mat.as_str().as_bytes();

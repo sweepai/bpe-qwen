@@ -233,7 +233,7 @@ def main():
         print("\n" + "="*80)
         print("Initializing bpe-qwen tokenizer...")
         start = time.time()
-        qwen_tokenizer = bpe_qwen.QwenTokenizer("../data")
+        qwen_tokenizer = bpe_qwen.QwenTokenizer("data")
         load_time = time.time() - start
         print(f"✓ bpe-qwen loaded in {load_time:.2f}s")
         print(f"  Vocab size: {qwen_tokenizer.vocab_size()}")

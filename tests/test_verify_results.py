@@ -134,7 +134,7 @@ def main():
     
     # Load our tokenizer
     try:
-        qwen_tokenizer = bpe_qwen.QwenTokenizer("../data")
+        qwen_tokenizer = bpe_qwen.QwenTokenizer("data")
         print(f"✓ bpe-qwen loaded, vocab size: {qwen_tokenizer.vocab_size()}")
     except Exception as e:
         print(f"✗ Failed to load bpe-qwen: {e}")
