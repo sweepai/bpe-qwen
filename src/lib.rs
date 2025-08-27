@@ -49,7 +49,79 @@ impl VectorPool {
     }
 }
 
-/// Fast ASCII detection using 8-byte chunks (SIMD-like optimization)
+/// Fast ASCII detection using true SIMD intrinsics
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+fn is_ascii_fast(text: &str) -> bool {
+    use std::arch::x86_64::*;
+    
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    
+    // Process 16 bytes at a time with SSE2
+    let chunks = len / 16;
+    let ptr = bytes.as_ptr();
+    
+    unsafe {
+        let mask = _mm_set1_epi8(0x80u8 as i8);
+        
+        for i in 0..chunks {
+            let data = _mm_loadu_si128(ptr.add(i * 16) as *const __m128i);
+            let result = _mm_and_si128(data, mask);
+            if _mm_movemask_epi8(result) != 0 {
+                return false;
+            }
+        }
+    }
+    
+    // Check remaining bytes
+    let remainder_start = chunks * 16;
+    for &byte in &bytes[remainder_start..] {
+        if byte & 0x80 != 0 {
+            return false;
+        }
+    }
+    
+    true
+}
+
+/// Fast ASCII detection using NEON SIMD for ARM (Apple Silicon)
+#[cfg(target_arch = "aarch64")]
+fn is_ascii_fast(text: &str) -> bool {
+    use std::arch::aarch64::*;
+    
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    
+    // Process 16 bytes at a time with NEON
+    let chunks = len / 16;
+    let ptr = bytes.as_ptr();
+    
+    unsafe {
+        for i in 0..chunks {
+            let data = vld1q_u8(ptr.add(i * 16));
+            let max_val = vmaxvq_u8(data);
+            if max_val >= 0x80 {
+                return false;
+            }
+        }
+    }
+    
+    // Check remaining bytes
+    let remainder_start = chunks * 16;
+    for &byte in &bytes[remainder_start..] {
+        if byte & 0x80 != 0 {
+            return false;
+        }
+    }
+    
+    true
+}
+
+/// Fallback ASCII detection for other architectures
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    target_arch = "aarch64"
+)))]
 fn is_ascii_fast(text: &str) -> bool {
     let bytes = text.as_bytes();
     let len = bytes.len();
