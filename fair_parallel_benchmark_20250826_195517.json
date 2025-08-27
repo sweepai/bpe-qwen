@@ -1,0 +1,29 @@
+{
+  "num_texts": 2891,
+  "num_workers": 8,
+  "total_chars": 1285622,
+  "results": {
+    "bpe_sequential": {
+      "time": 0.053848457988351583,
+      "speed": 5551468.160233405
+    },
+    "bpe_parallel": {
+      "time": 0.00951195799279958,
+      "speed": 31427598.842035666
+    },
+    "hf_sequential": {
+      "time": 0.4465277090203017,
+      "speed": 669472.4514540901
+    },
+    "hf_parallel": {
+      "time": 0.17246437503490597,
+      "speed": 1733331.8834077842
+    }
+  },
+  "speedups": {
+    "sequential": 8.292302615552963,
+    "parallel": 18.131322191020935,
+    "bpe_internal": 5.66113286340353,
+    "hf_internal": 2.589101134248314
+  }
+}
