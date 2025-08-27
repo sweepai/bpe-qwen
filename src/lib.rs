@@ -525,16 +525,12 @@ impl QwenTokenizer {
             } else if let Some(&dedup_id) = self.token_id_map.get(&token) {
                 // Map to deduplicated index and decode
                 let bytes = self.bpe.decode_tokens(&[dedup_id]);
-                let decoded_str = String::from_utf8_lossy(&bytes).to_string();
-                let interned = self.string_interner.intern(decoded_str);
-                result.push_str(&interned);
+                result.push_str(&String::from_utf8_lossy(&bytes));
             } else {
                 // Try decoding directly (though this might fail for out-of-range tokens)
                 if token < self.bpe.num_tokens() as u32 {
                     let bytes = self.bpe.decode_tokens(&[token]);
-                    let decoded_str = String::from_utf8_lossy(&bytes).to_string();
-                    let interned = self.string_interner.intern(decoded_str);
-                    result.push_str(&interned);
+                    result.push_str(&String::from_utf8_lossy(&bytes));
                 }
                 // If token is completely out of range, skip it
             }
