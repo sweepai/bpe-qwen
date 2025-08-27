@@ -70,7 +70,7 @@ struct QwenTokenizer {
     special_tokens: HashMap<String, u32>,
     special_token_ids: HashMap<u32, String>,
     token_id_map: HashMap<u32, u32>,  // Maps original token IDs to deduplicated indices
-    reverse_token_id_map: HashMap<u32, u32>,  // Maps deduplicated indices back to original IDs
+    reverse_token_id_vec: Vec<u32>,  // Maps deduplicated indices back to original IDs (Vec for O(1) lookup)
 }
 
 #[pymethods]
@@ -199,6 +199,7 @@ impl QwenTokenizer {
         // Find the proper hash factor to avoid collisions
         let hash_factor = bpe::byte_pair_encoding::find_hash_factor_for_dictionary(dedup_tokens.clone());
         
+        let num_dedup_tokens = dedup_tokens.len();
         let bpe = BytePairEncoding::from_dictionary(
             dedup_tokens,
             Some(hash_factor)
@@ -258,26 +259,44 @@ impl QwenTokenizer {
             special_tokens,
             special_token_ids,
             token_id_map,
-            reverse_token_id_map,
+            reverse_token_id_vec: {
+                let max_dedup_id = num_dedup_tokens as u32;
+                let mut vec = vec![0u32; max_dedup_id as usize];
+                for (dedup_id, &orig_id) in reverse_token_id_map.iter() {
+                    if *dedup_id < max_dedup_id {
+                        vec[*dedup_id as usize] = orig_id;
+                    }
+                }
+                vec
+            },
         })
     }
 
     /// Encode text to token IDs
     fn encode(&self, text: &str) -> PyResult<Vec<u32>> {
+        let total_start = std::time::Instant::now();
+        
         // Apply normalization if configured
+        let norm_start = std::time::Instant::now();
         let normalized = if let Some(ref norm_type) = self.normalizer_type {
-            match norm_type.as_str() {
-                "NFC" => text.nfc().collect::<String>(),
-                "NFD" => text.nfd().collect::<String>(),
-                "NFKC" => text.nfkc().collect::<String>(),
-                "NFKD" => text.nfkd().collect::<String>(),
-                _ => text.to_string(),
+            if text.is_ascii() {
+                text.to_string()  // Skip normalization for ASCII text
+            } else {
+                match norm_type.as_str() {
+                    "NFC" => text.nfc().collect::<String>(),
+                    "NFD" => text.nfd().collect::<String>(),
+                    "NFKC" => text.nfkc().collect::<String>(),
+                    "NFKD" => text.nfkd().collect::<String>(),
+                    _ => text.to_string(),
+                }
             }
         } else {
             text.to_string()
         };
+        let norm_time = norm_start.elapsed();
 
         // Handle special tokens - find all occurrences and their positions
+        let special_start = std::time::Instant::now();
         let mut special_token_positions = Vec::new();
         for (special_text, &special_id) in &self.special_tokens {
             let mut search_pos = 0;
@@ -290,9 +309,11 @@ impl QwenTokenizer {
         
         // Sort by position
         special_token_positions.sort_by_key(|&(pos, _, _)| pos);
+        let special_time = special_start.elapsed();
         
         // If we have special tokens, split and encode
-        if !special_token_positions.is_empty() {
+        let encode_start = std::time::Instant::now();
+        let result = if !special_token_positions.is_empty() {
             let mut result = Vec::new();
             let mut last_end = 0;
             
@@ -317,17 +338,23 @@ impl QwenTokenizer {
                 }
             }
             
-            return Ok(result);
-        }
-
-        self.encode_regular(&normalized)
+            result
+        } else {
+            self.encode_regular(&normalized)?
+        };
+        let encode_time = encode_start.elapsed();
+        let total_time = total_start.elapsed();
+        
+        // Profiling disabled for accurate benchmarks
+        
+        Ok(result)
     }
 
     /// Internal method to encode regular text
     fn encode_regular(&self, text: &str) -> PyResult<Vec<u32>> {
         if let Some(ref regex) = self.pre_tokenizer_regex {
             // Apply pre-tokenization using regex
-            let mut all_tokens = Vec::new();
+            let mut all_tokens = Vec::with_capacity(128);  // Optimal fixed capacity
             
             // Use standard regex which doesn't return Results
             let matches: Vec<_> = regex.find_iter(text).collect();
@@ -340,7 +367,8 @@ impl QwenTokenizer {
                 let dedup_tokens = self.bpe.encode_via_backtracking(piece_bytes);
                 // Map deduplicated indices back to original token IDs
                 for dedup_token in dedup_tokens {
-                    if let Some(&orig_id) = self.reverse_token_id_map.get(&dedup_token) {
+                    if (dedup_token as usize) < self.reverse_token_id_vec.len() {
+                        let orig_id = self.reverse_token_id_vec[dedup_token as usize];
                         all_tokens.push(orig_id);
                     } else {
                         all_tokens.push(dedup_token);  // Fallback to the dedup token if no mapping
@@ -351,16 +379,25 @@ impl QwenTokenizer {
             Ok(all_tokens)
         } else {
             // No pre-tokenization, encode the full text
+            let bpe_start = std::time::Instant::now();
             let dedup_tokens = self.bpe.encode_via_backtracking(text.as_bytes());
+            let bpe_time = bpe_start.elapsed();
+            
             // Map deduplicated indices back to original token IDs
-            let mut tokens = Vec::new();
+            let map_start = std::time::Instant::now();
+            let mut tokens = Vec::with_capacity(128);  // Optimal fixed capacity
             for dedup_token in dedup_tokens {
-                if let Some(&orig_id) = self.reverse_token_id_map.get(&dedup_token) {
+                if (dedup_token as usize) < self.reverse_token_id_vec.len() {
+                    let orig_id = self.reverse_token_id_vec[dedup_token as usize];
                     tokens.push(orig_id);
                 } else {
                     tokens.push(dedup_token);  // Fallback to the dedup token if no mapping
                 }
             }
+            let map_time = map_start.elapsed();
+            
+            // Profiling disabled for accurate benchmarks
+            
             Ok(tokens)
         }
     }
