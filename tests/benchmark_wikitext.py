@@ -280,8 +280,10 @@ def main():
         compare_tokenizers(results_list)
     
     # Save results to JSON
+    import os
+    os.makedirs("benchmark_results", exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"wikitext_benchmark_{timestamp}.json"
+    filename = f"benchmark_results/wikitext_benchmark_{timestamp}.json"
     
     with open(filename, "w") as f:
         json.dump({

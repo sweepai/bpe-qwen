@@ -238,8 +238,10 @@ def main(num_texts=5000, num_workers=8):
         print("✓ bpe-qwen parallel results match sequential")
     
     # Save results
+    import os
+    os.makedirs("benchmark_results", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"parallel_benchmark_{timestamp}.json"
+    filename = f"benchmark_results/parallel_benchmark_{timestamp}.json"
     
     # Prepare data for JSON (exclude actual token results for space)
     save_data = {
