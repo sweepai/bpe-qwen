@@ -108,6 +108,7 @@ We systematically optimized the tokenizer through multiple iterations, achieving
 | + True SIMD | 6.12M tok/s | 7.28x | 12.04M tok/s | 2.21x | ✅ Kept |
 | + Batch API | 6.06M tok/s | 7.50x | 12.04M tok/s | 2.32x | ❌ Reverted |
 | + Zero-Copy | **6.30M tok/s** | **7.83x** | **12.34M tok/s** | **2.32x** | ✅ Kept |
+| + Jemalloc | 5.70M tok/s | 8.91x | 11.01M tok/s | 2.19x | ❌ Reverted |
 
 #### Implementation Details
 - **SIMD ASCII**: Uses unsafe pointer arithmetic to check 8 bytes simultaneously for non-ASCII markers
