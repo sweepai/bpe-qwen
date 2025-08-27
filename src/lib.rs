@@ -392,22 +392,18 @@ impl QwenTokenizer {
         let norm_start = std::time::Instant::now();
         let normalized = if let Some(ref norm_type) = self.normalizer_type {
             if is_ascii_fast(text) {
-                let interned = self.string_interner.intern(text.to_string());
-                (*interned).to_string()
+                text.to_string()  // Skip normalization for ASCII text
             } else {
-                let normalized_str = match norm_type.as_str() {
+                match norm_type.as_str() {
                     "NFC" => text.nfc().collect::<String>(),
                     "NFD" => text.nfd().collect::<String>(),
                     "NFKC" => text.nfkc().collect::<String>(),
                     "NFKD" => text.nfkd().collect::<String>(),
                     _ => text.to_string(),
-                };
-                let interned = self.string_interner.intern(normalized_str);
-                (*interned).to_string()
+                }
             }
         } else {
-            let interned = self.string_interner.intern(text.to_string());
-            (*interned).to_string()
+            text.to_string()
         };
         let norm_time = norm_start.elapsed();
 
