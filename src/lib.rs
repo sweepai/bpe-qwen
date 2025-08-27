@@ -8,6 +8,46 @@ use serde_json::Value;
 use std::path::Path;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
+use std::cell::RefCell;
+
+/// Memory pool for reusing Vec<u32> allocations
+struct VectorPool {
+    available: RefCell<Vec<Vec<u32>>>,
+}
+
+impl VectorPool {
+    fn new() -> Self {
+        Self {
+            available: RefCell::new(Vec::new()),
+        }
+    }
+    
+    fn get_buffer(&self, min_capacity: usize) -> Vec<u32> {
+        let mut available = self.available.borrow_mut();
+        
+        // Find a buffer with sufficient capacity
+        for i in 0..available.len() {
+            if available[i].capacity() >= min_capacity {
+                let mut buf = available.swap_remove(i);
+                buf.clear();
+                return buf;
+            }
+        }
+        
+        // No suitable buffer found, create a new one
+        Vec::with_capacity(min_capacity.max(128))
+    }
+    
+    fn return_buffer(&self, buf: Vec<u32>) {
+        let mut available = self.available.borrow_mut();
+        
+        // Only keep buffers with reasonable capacity and limit pool size
+        if buf.capacity() >= 32 && buf.capacity() <= 8192 && available.len() < 10 {
+            available.push(buf);
+        }
+        // Otherwise let the buffer be dropped
+    }
+}
 
 /// Fast ASCII detection using 8-byte chunks (SIMD-like optimization)
 fn is_ascii_fast(text: &str) -> bool {
@@ -102,6 +142,7 @@ struct QwenTokenizer {
     special_token_ids: HashMap<u32, String>,
     token_id_map: HashMap<u32, u32>,  // Maps original token IDs to deduplicated indices
     reverse_token_id_vec: Vec<u32>,  // Maps deduplicated indices back to original IDs (Vec for O(1) lookup)
+    vector_pool: VectorPool,  // Pool for reusing Vec<u32> allocations
 }
 
 #[pymethods]
@@ -300,6 +341,7 @@ impl QwenTokenizer {
                 }
                 vec
             },
+            vector_pool: VectorPool::new(),
         })
     }
 
@@ -385,7 +427,7 @@ impl QwenTokenizer {
     fn encode_regular(&self, text: &str) -> PyResult<Vec<u32>> {
         if let Some(ref regex) = self.pre_tokenizer_regex {
             // Apply pre-tokenization using regex
-            let mut all_tokens = Vec::with_capacity(128);  // Optimal fixed capacity
+            let mut all_tokens = self.vector_pool.get_buffer(128);  // Get from pool
             
             // Use standard regex which doesn't return Results
             let matches: Vec<_> = regex.find_iter(text).collect();
@@ -416,7 +458,7 @@ impl QwenTokenizer {
             
             // Map deduplicated indices back to original token IDs
             let map_start = std::time::Instant::now();
-            let mut tokens = Vec::with_capacity(128);  // Optimal fixed capacity
+            let mut tokens = self.vector_pool.get_buffer(128);  // Get from pool
             for dedup_token in dedup_tokens {
                 if (dedup_token as usize) < self.reverse_token_id_vec.len() {
                     let orig_id = self.reverse_token_id_vec[dedup_token as usize];
