@@ -9,43 +9,6 @@ use std::path::Path;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
 use std::cell::RefCell;
-use std::sync::Arc;
-
-/// String interner for caching frequently used strings
-struct StringInterner {
-    cache: RefCell<HashMap<String, Arc<str>>>,
-}
-
-impl StringInterner {
-    fn new() -> Self {
-        Self {
-            cache: RefCell::new(HashMap::new()),
-        }
-    }
-    
-    fn intern(&self, s: String) -> Arc<str> {
-        let mut cache = self.cache.borrow_mut();
-        
-        // Check if string already exists in cache
-        if let Some(interned) = cache.get(&s) {
-            return interned.clone();
-        }
-        
-        // Create new interned string and cache it
-        let interned: Arc<str> = s.clone().into();
-        
-        // Limit cache size to prevent unbounded growth
-        if cache.len() < 1000 {
-            cache.insert(s, interned.clone());
-        }
-        
-        interned
-    }
-    
-    fn clear(&self) {
-        self.cache.borrow_mut().clear();
-    }
-}
 
 /// Memory pool for reusing Vec<u32> allocations
 struct VectorPool {
@@ -180,7 +143,6 @@ struct QwenTokenizer {
     token_id_map: HashMap<u32, u32>,  // Maps original token IDs to deduplicated indices
     reverse_token_id_vec: Vec<u32>,  // Maps deduplicated indices back to original IDs (Vec for O(1) lookup)
     vector_pool: VectorPool,  // Pool for reusing Vec<u32> allocations
-    string_interner: StringInterner,  // Cache for frequently used strings
 }
 
 #[pymethods]
@@ -380,7 +342,6 @@ impl QwenTokenizer {
                 vec
             },
             vector_pool: VectorPool::new(),
-            string_interner: StringInterner::new(),
         })
     }
 
