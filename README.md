@@ -68,8 +68,8 @@ Performance comparison with HuggingFace tokenizers on various text samples:
 
 | Metric | bpe-qwen (Rust) | HuggingFace | Speedup |
 |--------|-----------------|-------------|---------|
-| **Encoding Speed** | 6.05M tokens/sec | 784K tokens/sec | **7.72x** |
-| **Decoding Speed** | 7.55M tokens/sec | 5.46M tokens/sec | **1.38x** |
+| **Encoding Speed** | 6.12M tokens/sec | 841K tokens/sec | **7.28x** |
+| **Decoding Speed** | 12.04M tokens/sec | 5.46M tokens/sec | **2.21x** |
 | **Load Time** | ~3.3 seconds | ~2.0 seconds | 1.65x |
 | **Accuracy** | ✓ Matches | ✓ Baseline | 100% |
 
@@ -91,10 +91,21 @@ We systematically optimized the tokenizer through multiple iterations, achieving
 2. **ASCII normalization skip** (+3%): Fast-path ASCII text to skip Unicode normalization
 3. **Vector pre-allocation** (+13.5%): Optimal 128-token capacity reduces reallocation overhead
 
-#### Advanced Optimizations (6.39x → 7.72x faster)
+#### Advanced Optimizations (6.39x → 7.28x faster)
 4. **SIMD ASCII detection** (+4%): Process 8 bytes at once using u64 chunks instead of byte-by-byte checks
 5. **Memory pool** (+5%): Reuse `Vec<u32>` allocations between tokenization calls to reduce allocation pressure
-6. **String interning** (+3.6% encoding, -34% decoding): Cache frequently used strings (mixed results - benefits encoding but hurts decoding)
+6. **True SIMD intrinsics** (+3.2% encoding, +5.7% decoding): NEON on ARM, SSE2 on x86_64 for 16-byte parallel processing
+
+#### Experiment Results Table
+| Optimization | Encoding Speed | Encoding vs HF | Decoding Speed | Decoding vs HF | Status |
+|-------------|---------------|----------------|----------------|----------------|---------|
+| Baseline | 5.36M tok/s | 6.39x | 11.47M tok/s | 2.22x | ✅ Kept |
+| + SIMD ASCII | 5.57M tok/s | 6.87x | - | - | ✅ Kept |
+| + Memory Pool | 5.85M tok/s | 7.30x | 11.47M tok/s | 2.22x | ✅ Kept |
+| + String Interning | 6.05M tok/s | 7.72x | 7.55M tok/s | 1.38x | ❌ Reverted |
+| - String Interning | 5.93M tok/s | 6.99x | 11.39M tok/s | 2.12x | ✅ Kept |
+| + True SIMD | **6.12M tok/s** | **7.28x** | **12.04M tok/s** | **2.21x** | ✅ Kept |
+| + Batch API | 6.06M tok/s | 7.50x | 12.04M tok/s | 2.32x | ❌ Reverted |
 
 #### Implementation Details
 - **SIMD ASCII**: Uses unsafe pointer arithmetic to check 8 bytes simultaneously for non-ASCII markers

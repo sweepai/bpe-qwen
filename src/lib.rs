@@ -9,6 +9,7 @@ use std::path::Path;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
 use std::cell::RefCell;
+use std::borrow::Cow;
 
 /// Memory pool for reusing Vec<u32> allocations
 struct VectorPool {
@@ -421,22 +422,22 @@ impl QwenTokenizer {
     fn encode(&self, text: &str) -> PyResult<Vec<u32>> {
         let total_start = std::time::Instant::now();
         
-        // Apply normalization if configured
+        // Apply normalization if configured - use Cow to avoid allocation when not normalizing
         let norm_start = std::time::Instant::now();
-        let normalized = if let Some(ref norm_type) = self.normalizer_type {
+        let normalized: Cow<str> = if let Some(ref norm_type) = self.normalizer_type {
             if is_ascii_fast(text) {
-                text.to_string()  // Skip normalization for ASCII text
+                Cow::Borrowed(text)  // Zero-copy for ASCII text
             } else {
                 match norm_type.as_str() {
-                    "NFC" => text.nfc().collect::<String>(),
-                    "NFD" => text.nfd().collect::<String>(),
-                    "NFKC" => text.nfkc().collect::<String>(),
-                    "NFKD" => text.nfkd().collect::<String>(),
-                    _ => text.to_string(),
+                    "NFC" => Cow::Owned(text.nfc().collect::<String>()),
+                    "NFD" => Cow::Owned(text.nfd().collect::<String>()),
+                    "NFKC" => Cow::Owned(text.nfkc().collect::<String>()),
+                    "NFKD" => Cow::Owned(text.nfkd().collect::<String>()),
+                    _ => Cow::Borrowed(text),
                 }
             }
         } else {
-            text.to_string()
+            Cow::Borrowed(text)  // Zero-copy when no normalization
         };
         let norm_time = norm_start.elapsed();
 
