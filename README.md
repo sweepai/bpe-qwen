@@ -59,6 +59,52 @@ print(f"Batch tokens: {len(batch_tokens)} texts processed")
 # 18.13x faster than HuggingFace with native parallelism enabled
 ```
 
+### HuggingFace Compatibility
+
+Use bpe-qwen as a drop-in replacement for HuggingFace tokenizers:
+
+```python
+# Patch transformers to use bpe-qwen for Qwen models
+import bpe_qwen.hf_patch
+bpe_qwen.hf_patch.patch_transformers()
+
+# Now all Qwen tokenizers will use the fast bpe-qwen implementation!
+from transformers import AutoTokenizer
+
+# This automatically uses bpe-qwen under the hood
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-7B-Instruct")
+
+# Use it exactly like a HuggingFace tokenizer
+outputs = tokenizer(
+    "Hello, world!",
+    return_tensors="pt",
+    padding=True,
+    truncation=True
+)
+print(outputs["input_ids"])
+
+# Batch processing with native HuggingFace API
+batch = tokenizer(
+    ["Text 1", "Text 2", "Text 3"],
+    padding=True,
+    return_attention_mask=True
+)
+```
+
+Or use the compatibility wrapper directly:
+
+```python
+from bpe_qwen.hf_patch import QwenTokenizerFast
+
+# Direct usage with HuggingFace-compatible API
+tokenizer = QwenTokenizerFast(model_dir="path/to/tokenizer/files")
+
+# Supports all HuggingFace tokenizer methods
+ids = tokenizer.encode("Hello!", add_special_tokens=True)
+text = tokenizer.decode(ids, skip_special_tokens=True)
+batch = tokenizer.batch_encode_plus(texts, padding=True)
+```
+
 ### Downloading Tokenizer Files
 
 Download the required files from HuggingFace:
