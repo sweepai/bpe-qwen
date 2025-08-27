@@ -9,6 +9,37 @@ use std::path::Path;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
 
+/// Fast ASCII detection using 8-byte chunks (SIMD-like optimization)
+fn is_ascii_fast(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    
+    // Process 8 bytes at a time using u64
+    let chunks = len / 8;
+    let ptr = bytes.as_ptr() as *const u64;
+    
+    // Check 8-byte chunks
+    for i in 0..chunks {
+        unsafe {
+            let chunk = ptr.add(i).read_unaligned();
+            // If any byte has the high bit set (0x80), it's non-ASCII
+            if chunk & 0x8080808080808080u64 != 0 {
+                return false;
+            }
+        }
+    }
+    
+    // Check remaining bytes
+    let remainder_start = chunks * 8;
+    for &byte in &bytes[remainder_start..] {
+        if byte & 0x80 != 0 {
+            return false;
+        }
+    }
+    
+    true
+}
+
 /// Represents a HuggingFace tokenizer configuration
 #[derive(Debug, Deserialize)]
 struct HFTokenizerConfig {
@@ -279,7 +310,7 @@ impl QwenTokenizer {
         // Apply normalization if configured
         let norm_start = std::time::Instant::now();
         let normalized = if let Some(ref norm_type) = self.normalizer_type {
-            if text.is_ascii() {
+            if is_ascii_fast(text) {
                 text.to_string()  // Skip normalization for ASCII text
             } else {
                 match norm_type.as_str() {
