@@ -73,3 +73,6 @@ docs/_build/
 
 # Data directory with tokenizer files and benchmark results
 data/
+
+# Benchmark result files
+wikitext_benchmark_*.json
