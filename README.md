@@ -50,6 +50,12 @@ print(f"Vocab size: {tokenizer.vocab_size()}")  # 151643
 # Count tokens without full encoding (fast!)
 count = tokenizer.count_tokens(text)
 print(f"Token count: {count}")  # 4
+
+# Parallel batch encoding for high throughput
+texts = ["Hello, world!", "How are you?", "Tokenization is fast!"]
+batch_tokens = tokenizer.encode_batch_parallel(texts, num_workers=8)
+print(f"Batch tokens: {len(batch_tokens)} texts processed")
+# Up to 28.64M tokens/sec with 8 workers (4.92x faster than sequential)
 ```
 
 ### Downloading Tokenizer Files
@@ -107,8 +113,9 @@ We systematically optimized the tokenizer through multiple iterations, achieving
 | - String Interning | 5.93M tok/s | 6.99x | 11.39M tok/s | 2.12x | ✅ Kept |
 | + True SIMD | 6.12M tok/s | 7.28x | 12.04M tok/s | 2.21x | ✅ Kept |
 | + Batch API | 6.06M tok/s | 7.50x | 12.04M tok/s | 2.32x | ❌ Reverted |
-| + Zero-Copy | **6.30M tok/s** | **7.83x** | **12.34M tok/s** | **2.32x** | ✅ Kept |
+| + Zero-Copy | 6.30M tok/s | 7.83x | 12.34M tok/s | 2.32x | ✅ Kept |
 | + Jemalloc | 5.70M tok/s | 8.91x | 11.01M tok/s | 2.19x | ❌ Reverted |
+| + **Parallel Batch (8 workers)** | **28.64M tok/s** | **10.64x** | - | - | ✅ Kept |
 
 #### Implementation Details
 - **SIMD ASCII**: Uses unsafe pointer arithmetic to check 8 bytes simultaneously for non-ASCII markers

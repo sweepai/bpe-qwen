@@ -10,6 +10,8 @@ use std::path::Path;
 use bpe::byte_pair_encoding::BytePairEncoding;
 use std::cell::RefCell;
 use std::borrow::Cow;
+use rayon::prelude::*;
+use std::sync::Arc;
 
 /// Memory pool for reusing Vec<u32> allocations
 struct VectorPool {
@@ -203,6 +205,89 @@ struct AddedToken {
     id: u32,
     content: String,
     special: bool,
+}
+
+/// Helper function for parallel encoding without vector pool
+fn encode_text_parallel(
+    text: &str,
+    bpe: &BytePairEncoding,
+    pre_tokenizer_regex: &Option<Regex>,
+    normalizer_type: &Option<String>,
+    special_tokens: &HashMap<String, u32>,
+    reverse_token_id_vec: &Vec<u32>,
+) -> Result<Vec<u32>, String> {
+    // Check if text is empty
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    // Create a fresh buffer for this thread
+    let mut all_tokens = Vec::with_capacity(128);
+    
+    // Apply regex if present
+    if let Some(regex) = pre_tokenizer_regex {
+        for mat in regex.find_iter(text) {
+            let piece = mat.as_str();
+            
+            // Check for special tokens first
+            if let Some(&token_id) = special_tokens.get(piece) {
+                all_tokens.push(token_id);
+                continue;
+            }
+            
+            // Normalization: NFC normalize only when needed (non-ASCII with NFC normalizer)
+            let normalized = if let Some(ref nt) = normalizer_type {
+                if nt == "NFC" && !is_ascii_fast(piece) {
+                    // Use Cow to avoid allocation when possible
+                    Cow::from(piece.nfc().collect::<String>())
+                } else {
+                    Cow::from(piece)
+                }
+            } else {
+                Cow::from(piece)
+            };
+            
+            // BPE tokenization
+            let dedup_tokens = bpe.encode_via_backtracking(normalized.as_bytes());
+            
+            // Map from deduplicated indices to original token IDs
+            for dedup_id in dedup_tokens {
+                let original_id = *reverse_token_id_vec
+                    .get(dedup_id as usize)
+                    .ok_or_else(|| format!("Invalid dedup ID: {}", dedup_id))?;
+                all_tokens.push(original_id);
+            }
+        }
+    } else {
+        // No regex - tokenize the whole text
+        if let Some(&token_id) = special_tokens.get(text) {
+            all_tokens.push(token_id);
+        } else {
+            // Normalization
+            let normalized = if let Some(ref nt) = normalizer_type {
+                if nt == "NFC" && !is_ascii_fast(text) {
+                    Cow::from(text.nfc().collect::<String>())
+                } else {
+                    Cow::from(text)
+                }
+            } else {
+                Cow::from(text)
+            };
+            
+            // BPE tokenization
+            let dedup_tokens = bpe.encode_via_backtracking(normalized.as_bytes());
+            
+            // Map from deduplicated indices to original token IDs
+            for dedup_id in dedup_tokens {
+                let original_id = *reverse_token_id_vec
+                    .get(dedup_id as usize)
+                    .ok_or_else(|| format!("Invalid dedup ID: {}", dedup_id))?;
+                all_tokens.push(original_id);
+            }
+        }
+    }
+    
+    Ok(all_tokens)
 }
 
 /// QwenTokenizer - A fast BPE tokenizer for Qwen models
@@ -545,6 +630,131 @@ impl QwenTokenizer {
             // Profiling disabled for accurate benchmarks
             
             Ok(tokens)
+        }
+    }
+    
+    /// Thread-safe encode for parallel processing (doesn't use vector pool)
+    fn encode_for_parallel(&self, text: &str) -> PyResult<Vec<u32>> {
+        // Apply normalization if configured - use Cow to avoid allocation when not normalizing
+        let normalized: Cow<str> = if let Some(ref norm_type) = self.normalizer_type {
+            if is_ascii_fast(text) {
+                Cow::Borrowed(text)  // Zero-copy for ASCII text
+            } else {
+                match norm_type.as_str() {
+                    "NFC" => Cow::Owned(text.nfc().collect::<String>()),
+                    "NFD" => Cow::Owned(text.nfd().collect::<String>()),
+                    "NFKC" => Cow::Owned(text.nfkc().collect::<String>()),
+                    "NFKD" => Cow::Owned(text.nfkd().collect::<String>()),
+                    _ => Cow::Borrowed(text),
+                }
+            }
+        } else {
+            Cow::Borrowed(text)  // Zero-copy when no normalization
+        };
+
+        // Handle special tokens
+        let mut special_token_positions = Vec::new();
+        for (special_text, &special_id) in &self.special_tokens {
+            let mut search_pos = 0;
+            while let Some(pos) = normalized[search_pos..].find(special_text) {
+                let actual_pos = search_pos + pos;
+                special_token_positions.push((actual_pos, special_text.len(), special_id));
+                search_pos = actual_pos + special_text.len();
+            }
+        }
+        special_token_positions.sort_by_key(|&(pos, _, _)| pos);
+        
+        // Process text
+        if special_token_positions.is_empty() {
+            // No special tokens, encode the full text
+            self.encode_regular(&normalized)
+        } else {
+            // Split text around special tokens and encode
+            let mut all_tokens = Vec::with_capacity(128);  // Fixed capacity
+            let mut last_pos = 0;
+            
+            for (pos, len, special_id) in special_token_positions {
+                // Encode text before special token
+                if pos > last_pos {
+                    let text_segment = &normalized[last_pos..pos];
+                    if !text_segment.is_empty() {
+                        let tokens = self.encode_regular(text_segment)?;
+                        all_tokens.extend(tokens);
+                    }
+                }
+                // Add special token
+                all_tokens.push(special_id);
+                last_pos = pos + len;
+            }
+            
+            // Encode remaining text after last special token
+            if last_pos < normalized.len() {
+                let text_segment = &normalized[last_pos..];
+                if !text_segment.is_empty() {
+                    let tokens = self.encode_regular(text_segment)?;
+                    all_tokens.extend(tokens);
+                }
+            }
+            
+            Ok(all_tokens)
+        }
+    }
+    
+    /// Batch encode multiple texts in parallel using Rayon
+    #[pyo3(signature = (texts, num_workers=None))]
+    fn encode_batch_parallel(&self, texts: Vec<String>, num_workers: Option<usize>) -> PyResult<Vec<Vec<u32>>> {
+        use rayon::prelude::*;
+        use std::sync::Arc;
+        
+        // Share read-only data across threads using Arc
+        let bpe = Arc::new(&self.bpe);
+        let pre_tokenizer_regex = Arc::new(&self.pre_tokenizer_regex);
+        let normalizer_type = Arc::new(&self.normalizer_type);
+        let special_tokens = Arc::new(&self.special_tokens);
+        let reverse_token_id_vec = Arc::new(&self.reverse_token_id_vec);
+        
+        // Use a scoped thread pool if num_workers is specified, otherwise use global pool
+        if let Some(workers) = num_workers {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to create thread pool: {}", e)))?;
+                
+            let results: Vec<Vec<u32>> = pool.install(|| {
+                texts
+                    .par_iter()
+                    .map(|text| {
+                        encode_text_parallel(
+                            text,
+                            &**bpe,
+                            &**pre_tokenizer_regex,
+                            &**normalizer_type,
+                            &**special_tokens,
+                            &**reverse_token_id_vec,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            }).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
+            
+            Ok(results)
+        } else {
+            // Use global thread pool
+            let results: Vec<Vec<u32>> = texts
+                .par_iter()
+                .map(|text| {
+                    encode_text_parallel(
+                        text,
+                        &**bpe,
+                        &**pre_tokenizer_regex,
+                        &**normalizer_type,
+                        &**special_tokens,
+                        &**reverse_token_id_vec,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
+            
+            Ok(results)
         }
     }
 

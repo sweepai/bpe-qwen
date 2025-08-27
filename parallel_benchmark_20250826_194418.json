@@ -1,0 +1,37 @@
+{
+  "num_texts": 5000,
+  "num_workers": 8,
+  "total_chars": 1285622,
+  "results": {
+    "bpe_qwen_sequential": {
+      "elapsed": 0.0513125840225257,
+      "total_tokens": 298938,
+      "tokens_per_sec": 5825822.372710158,
+      "texts_per_sec": 56340.955246589816
+    },
+    "bpe_qwen_parallel": {
+      "elapsed": 0.010438749974127859,
+      "total_tokens": 298938,
+      "tokens_per_sec": 28637336.916863535,
+      "texts_per_sec": 276948.8690854039
+    },
+    "huggingface_sequential": {
+      "elapsed": 0.42364925000583753,
+      "total_tokens": 298938,
+      "tokens_per_sec": 705626.175417237,
+      "texts_per_sec": 6824.041350150306
+    },
+    "huggingface_parallel": {
+      "elapsed": 0.1110342500032857,
+      "total_tokens": 298938,
+      "tokens_per_sec": 2692304.4014901156,
+      "texts_per_sec": 26037.011101659624
+    }
+  },
+  "speedups": {
+    "sequential": 8.256244702466356,
+    "parallel": 10.636738141873394,
+    "bpe_qwen_internal": 4.915587033859653,
+    "huggingface_internal": 3.815482610035201
+  }
+}
