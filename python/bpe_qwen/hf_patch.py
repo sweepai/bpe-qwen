@@ -19,43 +19,11 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
 import warnings
+import bpe_qwen
 import importlib.util
 
-# Handle different import scenarios
-bpe_qwen_module = None
-
-# Add python directory to path if it exists
-python_dir = Path(__file__).parent.parent / "python"
-
-# Try importing from the python directory
-if python_dir.exists():
-    # Save current path
-    original_path = sys.path.copy()
-    original_modules = sys.modules.copy()
-
-    try:
-        # Remove any existing bpe_qwen module to avoid conflicts
-        if 'bpe_qwen' in sys.modules:
-            del sys.modules['bpe_qwen']
-
-        # Add python directory to beginning of path
-        sys.path.insert(0, str(python_dir))
-
-        # Import the actual bpe_qwen.bpe_qwen module
-        from bpe_qwen import bpe_qwen as bpe_qwen_module
-
-        # Verify it has QwenTokenizer
-        if not hasattr(bpe_qwen_module, 'QwenTokenizer'):
-            warnings.warn("bpe_qwen module found but missing QwenTokenizer")
-            bpe_qwen_module = None
-    except Exception as e:
-        warnings.warn(f"Could not import bpe_qwen compiled module: {e}")
-        bpe_qwen_module = None
-        # Try to restore modules if import failed
-        sys.modules.update(original_modules)
-    finally:
-        # Restore original path
-        sys.path = original_path
+# Import bpe_qwen module directly - fail fast if not available
+from bpe_qwen import bpe_qwen as bpe_qwen_module
 
 
 class QwenTokenizerFast:
@@ -100,38 +68,12 @@ class QwenTokenizerFast:
             self._tokenizer_dir = self._find_tokenizer_dir()
 
         # Initialize the actual bpe-qwen tokenizer
-        try:
-            if bpe_qwen_module is not None:
-                self._tokenizer = bpe_qwen_module.QwenTokenizer(str(self._tokenizer_dir))
-                self._initialized = True
-            else:
-                warnings.warn("bpe-qwen module not available")
-                self._tokenizer = None
-                self._initialized = False
-        except Exception as e:
-            warnings.warn(f"Failed to initialize bpe-qwen tokenizer: {e}")
-            self._tokenizer = None
-            self._initialized = False
+        self._tokenizer = bpe_qwen_module.QwenTokenizer(str(self._tokenizer_dir))
 
     def _find_tokenizer_dir(self) -> str:
-        """Try to find tokenizer directory from common locations."""
-        # Check for local data directory
+        """Find tokenizer directory from local data directory."""
         local_data = Path(__file__).parent.parent / "data"
-        if local_data.exists() and (local_data / "vocab.json").exists():
-            return str(local_data)
-
-        # Check HuggingFace cache (simplified - you might need to enhance this)
-        hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
-        if hf_cache.exists():
-            # Look for Qwen model directories
-            for model_dir in hf_cache.glob("models--Qwen--*"):
-                snapshots = model_dir / "snapshots"
-                if snapshots.exists():
-                    for snapshot in snapshots.iterdir():
-                        if (snapshot / "vocab.json").exists():
-                            return str(snapshot)
-
-        raise FileNotFoundError("Could not find tokenizer files. Please specify model_dir.")
+        return str(local_data)
 
     def encode(self,
                text: str,
@@ -146,9 +88,6 @@ class QwenTokenizerFast:
 
         Compatible with HuggingFace's encode method.
         """
-        if not self._initialized or self._tokenizer is None:
-            raise RuntimeError("Tokenizer not properly initialized")
-
         # Use bpe-qwen's fast encoding
         token_ids = self._tokenizer.encode(text)
 
@@ -192,9 +131,6 @@ class QwenTokenizerFast:
 
         Compatible with HuggingFace's decode method.
         """
-        if not self._initialized or self._tokenizer is None:
-            raise RuntimeError("Tokenizer not properly initialized")
-
         # Convert tensors to list if needed
         if hasattr(token_ids, 'tolist'):
             token_ids = token_ids.tolist()
@@ -238,15 +174,8 @@ class QwenTokenizerFast:
         """
         # Handle batch input
         if isinstance(text, list):
-            # For parallel batch processing
-            if hasattr(self._tokenizer, 'encode_batch_parallel'):
-                # Use fast parallel encoding
-                input_ids = self._tokenizer.encode_batch_parallel(text, num_workers=8)
-            else:
-                # Fallback to sequential
-                input_ids = [self.encode(t, add_special_tokens=add_special_tokens,
-                                        padding=False, truncation=truncation,
-                                        max_length=max_length) for t in text]
+            # Use fast parallel encoding
+            input_ids = self._tokenizer.encode_batch_parallel(text, num_workers=8)
 
             # Handle padding for batch
             if padding:
@@ -325,9 +254,7 @@ class QwenTokenizerFast:
     @property
     def vocab_size(self) -> int:
         """Get vocabulary size."""
-        if self._initialized and self._tokenizer:
-            return self._tokenizer.vocab_size()
-        return 151665  # Default Qwen vocab size
+        return self._tokenizer.vocab_size()
 
     def save_pretrained(self, save_directory: str, **kwargs):
         """Save tokenizer to directory (HF-compatible)."""
@@ -342,79 +269,67 @@ def patch_transformers():
     After calling this function, any AutoTokenizer.from_pretrained() call
     for Qwen models will return the fast bpe-qwen implementation.
     """
-    try:
-        import transformers
-        from transformers import AutoTokenizer
+    import transformers
+    from transformers import AutoTokenizer
 
-        # Store original from_pretrained
-        _original_from_pretrained = AutoTokenizer.from_pretrained
+    # Store original from_pretrained
+    _original_from_pretrained = AutoTokenizer.from_pretrained
 
-        def patched_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
-            """Patched from_pretrained that uses bpe-qwen for Qwen models."""
+    def patched_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
+        """Patched from_pretrained that uses bpe-qwen for Qwen models."""
 
-            # Check if this is a Qwen model
-            model_name = str(pretrained_model_name_or_path).lower()
-            is_qwen = 'qwen' in model_name
+        # Check if this is a Qwen model
+        model_name = str(pretrained_model_name_or_path).lower()
+        is_qwen = 'qwen' in model_name
 
-            # Also check the tokenizer_class if specified
-            if not is_qwen and 'tokenizer_class' in kwargs:
-                is_qwen = 'qwen' in str(kwargs.get('tokenizer_class', '')).lower()
+        # Also check the tokenizer_class if specified
+        if not is_qwen and 'tokenizer_class' in kwargs:
+            is_qwen = 'qwen' in str(kwargs.get('tokenizer_class', '')).lower()
 
-            if is_qwen:
-                # Use bpe-qwen implementation
-                print(f"[bpe-qwen] Patching tokenizer for {pretrained_model_name_or_path}")
+        if is_qwen:
+            # Use bpe-qwen implementation
+            print(f"[bpe-qwen] Patching tokenizer for {pretrained_model_name_or_path}")
 
-                # Try to get model directory
-                if Path(pretrained_model_name_or_path).exists():
-                    model_dir = pretrained_model_name_or_path
-                else:
-                    # Let it download first if needed
-                    original_tokenizer = _original_from_pretrained(
-                        pretrained_model_name_or_path, *args, **kwargs
-                    )
-                    # Get the directory from the original tokenizer
-                    if hasattr(original_tokenizer, 'name_or_path'):
-                        model_dir = original_tokenizer.name_or_path
-                    else:
-                        model_dir = None
+            # Get model directory
+            if Path(pretrained_model_name_or_path).exists():
+                model_dir = pretrained_model_name_or_path
+            else:
+                # Let it download first if needed
+                original_tokenizer = _original_from_pretrained(
+                    pretrained_model_name_or_path, *args, **kwargs
+                )
+                # Get the directory from the original tokenizer
+                model_dir = original_tokenizer.name_or_path
 
-                # Create wrapped tokenizer
-                return QwenTokenizerFast(model_dir=model_dir, **kwargs)
+            # Create wrapped tokenizer
+            return QwenTokenizerFast(model_dir=model_dir, **kwargs)
 
-            # For non-Qwen models, use original implementation
-            return _original_from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
+        # For non-Qwen models, use original implementation
+        return _original_from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
 
-        # Apply the patch
-        AutoTokenizer.from_pretrained = patched_from_pretrained
-        transformers.AutoTokenizer.from_pretrained = patched_from_pretrained
+    # Apply the patch
+    AutoTokenizer.from_pretrained = patched_from_pretrained
+    transformers.AutoTokenizer.from_pretrained = patched_from_pretrained
 
-        print("[bpe-qwen] Successfully patched transformers.AutoTokenizer")
-        print("[bpe-qwen] Qwen tokenizers will now use the fast bpe-qwen implementation")
+    print("[bpe-qwen] Successfully patched transformers.AutoTokenizer")
+    print("[bpe-qwen] Qwen tokenizers will now use the fast bpe-qwen implementation")
 
-        return True
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-7B-Instruct")
+    print(tokenizer.encode("Hello, world!"))
 
-    except ImportError as e:
-        warnings.warn(f"Failed to patch transformers: {e}")
-        return False
+    return True
 
 
 def unpatch_transformers():
     """Restore original transformers behavior."""
-    try:
-        import transformers
-        from transformers import AutoTokenizer
+    import transformers
+    from transformers import AutoTokenizer
 
-        if hasattr(AutoTokenizer.from_pretrained, '__wrapped__'):
-            # Restore original
-            AutoTokenizer.from_pretrained = AutoTokenizer.from_pretrained.__wrapped__
-            transformers.AutoTokenizer.from_pretrained = AutoTokenizer.from_pretrained.__wrapped__
-            print("[bpe-qwen] Transformers has been unpatched")
-            return True
-        else:
-            print("[bpe-qwen] Transformers was not patched")
-            return False
-    except ImportError:
-        return False
+    # Restore original
+    AutoTokenizer.from_pretrained = AutoTokenizer.from_pretrained.__wrapped__
+    transformers.AutoTokenizer.from_pretrained = AutoTokenizer.from_pretrained.__wrapped__
+    print("[bpe-qwen] Transformers has been unpatched")
+    return True
 
 
 # Auto-patch on import if BPE_QWEN_AUTO_PATCH env var is set
