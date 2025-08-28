@@ -15,14 +15,9 @@ Usage:
 """
 
 import os
-import sys
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
-import warnings
-import bpe_qwen
-import importlib.util
-
-# Import bpe_qwen module directly - fail fast if not available
+from huggingface_hub import snapshot_download
 from bpe_qwen import bpe_qwen as bpe_qwen_module
 
 
@@ -294,12 +289,7 @@ def patch_transformers():
             if Path(pretrained_model_name_or_path).exists():
                 model_dir = pretrained_model_name_or_path
             else:
-                # Let it download first if needed
-                original_tokenizer = _original_from_pretrained(
-                    pretrained_model_name_or_path, *args, **kwargs
-                )
-                # Get the directory from the original tokenizer
-                model_dir = original_tokenizer.name_or_path
+                model_dir = snapshot_download(pretrained_model_name_or_path)
 
             # Create wrapped tokenizer
             return QwenTokenizerFast(model_dir=model_dir, **kwargs)
@@ -314,8 +304,8 @@ def patch_transformers():
     print("[bpe-qwen] Successfully patched transformers.AutoTokenizer")
     print("[bpe-qwen] Qwen tokenizers will now use the fast bpe-qwen implementation")
 
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-7B-Instruct")
-    print(tokenizer.encode("Hello, world!"))
+    # tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-7B-Instruct")
+    # print(tokenizer.encode("Hello, world!"))
 
     return True
 
