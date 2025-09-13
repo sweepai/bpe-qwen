@@ -789,27 +789,36 @@ impl QwenTokenizer {
 
     /// Decode token IDs back to text
     fn decode(&self, tokens: Vec<u32>) -> PyResult<String> {
-        let mut result = String::new();
-        
+        let mut all_bytes = Vec::new();
+
         for token in tokens {
             // Check if it's a special token first
             if let Some(special_text) = self.special_token_ids.get(&token) {
-                result.push_str(special_text);
+                // For special tokens, we need to flush any accumulated bytes first
+                if !all_bytes.is_empty() {
+                    // This shouldn't happen normally, but handle it gracefully
+                    let text = String::from_utf8_lossy(&all_bytes);
+                    all_bytes.clear();
+                }
+                // Special tokens are already valid UTF-8 strings
+                all_bytes.extend_from_slice(special_text.as_bytes());
             } else if let Some(&dedup_id) = self.token_id_map.get(&token) {
                 // Map to deduplicated index and decode
                 let bytes = self.bpe.decode_tokens(&[dedup_id]);
-                result.push_str(&String::from_utf8_lossy(&bytes));
+                all_bytes.extend_from_slice(&bytes);
             } else {
                 // Try decoding directly (though this might fail for out-of-range tokens)
                 if token < self.bpe.num_tokens() as u32 {
                     let bytes = self.bpe.decode_tokens(&[token]);
-                    result.push_str(&String::from_utf8_lossy(&bytes));
+                    all_bytes.extend_from_slice(&bytes);
                 }
                 // If token is completely out of range, skip it
             }
         }
-        
-        Ok(result)
+
+        // Convert all collected bytes to string at the end
+        // This preserves multi-byte UTF-8 sequences that span multiple tokens
+        Ok(String::from_utf8_lossy(&all_bytes).into_owned())
     }
 
     /// Encode text to token IDs and return as bytes
