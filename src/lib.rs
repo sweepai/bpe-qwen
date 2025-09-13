@@ -2,12 +2,14 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use serde::Deserialize;
 use std::collections::HashMap;
-use fancy_regex::Regex;
+use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 use serde_json::Value;
 use std::path::Path;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
+
+mod pretokenization;
 use std::cell::RefCell;
 use std::borrow::Cow;
 use rayon::prelude::*;
@@ -226,21 +228,23 @@ fn encode_text_parallel(
     
     // Apply regex if present
     if let Some(regex) = pre_tokenizer_regex {
-        let matches: Vec<_> = regex.find_iter(text)
-            .filter_map(|m| m.ok())
-            .collect();
-        for mat in matches {
-            let piece = mat.as_str();
-            
+        // Use the tested pretokenization logic with pre-compiled regex
+        let pretokens = crate::pretokenization::pretokenize_fast_with_regex(text, regex);
+
+        for piece in pretokens {
+            if piece.is_empty() {
+                continue;
+            }
+
             // Check for special tokens first
-            if let Some(&token_id) = special_tokens.get(piece) {
+            if let Some(&token_id) = special_tokens.get(&piece) {
                 all_tokens.push(token_id);
                 continue;
             }
             
             // Normalization: NFC normalize only when needed (non-ASCII with NFC normalizer)
             let normalized = if let Some(ref nt) = normalizer_type {
-                if nt == "NFC" && !is_ascii_fast(piece) {
+                if nt == "NFC" && !is_ascii_fast(&piece) {
                     // Use Cow to avoid allocation when possible
                     Cow::from(piece.nfc().collect::<String>())
                 } else {
@@ -492,8 +496,9 @@ impl QwenTokenizer {
                 }
             }
         } else {
-            // Default Qwen pre-tokenization pattern (with lookahead support via fancy-regex)
-            let default_pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
+            // Default Qwen pre-tokenization pattern (without lookahead for speed)
+            // We'll handle the lookahead behavior in a second pass
+            let default_pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
             match Regex::new(default_pattern) {
                 Ok(regex) => Some(regex),
                 Err(e) => {
@@ -605,16 +610,17 @@ impl QwenTokenizer {
     /// Internal method to encode regular text
     fn encode_regular(&self, text: &str) -> PyResult<Vec<u32>> {
         if let Some(ref regex) = self.pre_tokenizer_regex {
-            // Apply pre-tokenization using regex
+            // Apply pre-tokenization using the tested logic from pretokenization module
             let mut all_tokens = self.vector_pool.get_buffer(128);  // Get from pool
 
-            // fancy-regex returns Results, so we need to handle them
-            let matches: Vec<_> = regex.find_iter(text)
-                .filter_map(|m| m.ok())
-                .collect();
+            // Use the corrected pretokenization logic that passes all tests (with pre-compiled regex)
+            let pretokens = crate::pretokenization::pretokenize_fast_with_regex(text, regex);
 
-            for mat in matches {
-                let piece = mat.as_str();
+            // Now encode the pretokens
+            for piece in pretokens {
+                if piece.is_empty() {
+                    continue;
+                }
                 // Convert to bytes for BPE encoding
                 let piece_bytes = piece.as_bytes();
                 // Use the fast BPE encoding from rust-gems
@@ -832,16 +838,16 @@ impl QwenTokenizer {
 
         // Use the fast count method from BPE
         let mut count = 0;
-        
-        if let Some(ref regex) = self.pre_tokenizer_regex {
-            // fancy_regex returns Results, so we need to handle them
-            let matches: Vec<_> = regex.find_iter(&normalized)
-                .filter_map(|m| m.ok())
-                .collect();
 
-            for mat in matches {
-                let piece_bytes = mat.as_str().as_bytes();
-                count += self.bpe.count(piece_bytes);
+        if let Some(ref regex) = self.pre_tokenizer_regex {
+            // Use the tested pretokenization logic with pre-compiled regex
+            let pretokens = crate::pretokenization::pretokenize_fast_with_regex(&normalized, regex);
+
+            for piece in pretokens {
+                if !piece.is_empty() {
+                    let piece_bytes = piece.as_bytes();
+                    count += self.bpe.count(piece_bytes);
+                }
             }
         } else {
             count = self.bpe.count(normalized.as_bytes());
