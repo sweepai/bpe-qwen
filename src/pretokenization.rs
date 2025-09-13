@@ -40,8 +40,11 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
     while i < matches.len() {
         let mat = matches[i].as_str();
 
-        // Check if this match is only whitespace
-        if mat.chars().all(|c| c.is_whitespace()) {
+        // Check if this match is only whitespace (but not containing \r or \n)
+        // \r and \n are handled specially by the regex and should not be split
+        if mat.chars().all(|c| c.is_whitespace())
+            && !mat.contains('\r')
+            && !mat.contains('\n') {
             // Check what follows this match
             if i + 1 < matches.len() {
                 let next = matches[i + 1].as_str();
@@ -150,6 +153,33 @@ mod tests {
     fn test_tabs() {
         let text = "\t\tcode";
         let (slow, fast, matches) = compare_pretokenization(text);
+        assert!(matches, "Mismatch for '{}'\nSlow: {:?}\nFast: {:?}", text, slow, fast);
+    }
+
+    #[test]
+    fn test_crlf() {
+        let text = "line1\r\nline2";
+        let (slow, fast, matches) = compare_pretokenization(text);
+        assert!(matches, "Mismatch for '{}'\nSlow: {:?}\nFast: {:?}", text, slow, fast);
+    }
+
+    #[test]
+    fn test_mixed_line_endings() {
+        let text = "line1\rline2\nline3\r\nline4";
+        let (slow, fast, matches) = compare_pretokenization(text);
+
+        // Print detailed output for debugging
+        println!("Text: {:?}", text);
+        println!("Slow result: {:?}", slow);
+        println!("Fast result: {:?}", fast);
+        println!("Matches: {}", matches);
+
+        // Check specifically for the \r\n sequence
+        let has_crlf_slow = slow.iter().any(|s| s == "\r\n");
+        let has_crlf_fast = fast.iter().any(|s| s == "\r\n");
+        println!("Slow has \\r\\n token: {}", has_crlf_slow);
+        println!("Fast has \\r\\n token: {}", has_crlf_fast);
+
         assert!(matches, "Mismatch for '{}'\nSlow: {:?}\nFast: {:?}", text, slow, fast);
     }
 }
