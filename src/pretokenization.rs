@@ -49,8 +49,12 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
             if i + 1 < matches.len() {
                 let next = matches[i + 1].as_str();
 
-                // If next token starts with non-whitespace, merge last space with it
-                if !next.is_empty() && !next.chars().next().unwrap().is_whitespace() {
+                // The lookahead \s+(?!\S) means "whitespace NOT followed by non-whitespace"
+                // So when whitespace IS followed by non-whitespace, we need to merge the last space
+                // BUT: Numbers (\p{N}) are matched as individual digits and never accept leading spaces
+                // So we should NOT merge spaces with numbers
+                let first_char = next.chars().next().unwrap();
+                if !next.is_empty() && !first_char.is_whitespace() && !first_char.is_numeric() {
                     let space_chars: Vec<char> = mat.chars().collect();
 
                     if space_chars.len() > 1 {

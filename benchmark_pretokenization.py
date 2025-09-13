@@ -146,11 +146,35 @@ def benchmark_pretokenization():
             fast_result = bpe_qwen.pretokenize_fast(text)
         fast_time = (time.perf_counter() - start) / iterations
 
-        # Check correctness
+        # Check correctness and find differences
         if slow_result == fast_result:
             correctness = "✓ MATCH"
+            delta_info = ""
         else:
             correctness = f"✗ MISMATCH ({len(slow_result)} vs {len(fast_result)} tokens)"
+
+            # Find the first few differences
+            max_show = 5
+            differences = []
+            for i in range(min(len(slow_result), len(fast_result))):
+                if slow_result[i] != fast_result[i]:
+                    differences.append(f"    Position {i}: slow={repr(slow_result[i])} vs fast={repr(fast_result[i])}")
+                    if len(differences) >= max_show:
+                        break
+
+            # Check for length differences
+            if len(slow_result) != len(fast_result):
+                if len(slow_result) > len(fast_result):
+                    differences.append(f"    Slow has {len(slow_result) - len(fast_result)} extra tokens at end")
+                else:
+                    differences.append(f"    Fast has {len(fast_result) - len(slow_result)} extra tokens at end")
+
+            if differences:
+                delta_info = "\n  Differences:\n" + "\n".join(differences[:max_show])
+                if len(differences) > max_show:
+                    delta_info += f"\n    ... and {len(differences) - max_show} more differences"
+            else:
+                delta_info = ""
 
         # Calculate metrics
         speedup = slow_time / fast_time if fast_time > 0 else 0
@@ -162,6 +186,8 @@ def benchmark_pretokenization():
         print(f"  Speedup:             {speedup:.2f}x")
         print(f"  Tokens produced:     {len(fast_result)}")
         print(f"  Correctness:         {correctness}")
+        if delta_info:
+            print(delta_info)
 
 if __name__ == "__main__":
     benchmark_pretokenization()
