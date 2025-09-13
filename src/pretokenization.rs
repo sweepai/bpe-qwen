@@ -50,28 +50,164 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
                 let next = matches[i + 1].as_str();
 
                 // The lookahead \s+(?!\S) means "whitespace NOT followed by non-whitespace"
-                // So when whitespace IS followed by non-whitespace, we need to merge the last space
-                // BUT: Numbers (\p{N}) are matched as individual digits and never accept leading spaces
-                // So we should NOT merge spaces with numbers
-                let first_char = next.chars().next().unwrap();
-                if !next.is_empty() && !first_char.is_whitespace() && !first_char.is_numeric() {
-                    let space_chars: Vec<char> = mat.chars().collect();
+                // So when whitespace IS followed by non-whitespace, we need to handle it specially
+                if !next.is_empty() {
+                    let first_char = next.chars().next().unwrap();
 
-                    if space_chars.len() > 1 {
-                        // Keep all but last space as separate token
-                        let first_part: String = space_chars[..space_chars.len() - 1].iter().collect();
-                        let last_space: String = space_chars[space_chars.len() - 1].to_string();
+                    if first_char.is_alphabetic() {
+                        // For alphabetic chars, merge the last space with the next token
+                        let space_chars: Vec<char> = mat.chars().collect();
 
-                        result.push(first_part);
-                        // Merge last space with next token
-                        result.push(format!("{}{}", last_space, next));
-                        i += 2; // Skip next token since we merged it
-                        continue;
-                    } else {
-                        // Single space - merge with next token
-                        result.push(format!("{}{}", mat, next));
-                        i += 2; // Skip next token since we merged it
-                        continue;
+                        if space_chars.len() > 1 {
+                            // Keep all but last space as separate token
+                            let first_part: String = space_chars[..space_chars.len() - 1].iter().collect();
+                            let last_space: String = space_chars[space_chars.len() - 1].to_string();
+
+                            result.push(first_part);
+                            // Merge last space with next token
+                            result.push(format!("{}{}", last_space, next));
+                            i += 2; // Skip next token since we merged it
+                            continue;
+                        } else {
+                            // Single space - merge with next token
+                            result.push(format!("{}{}", mat, next));
+                            i += 2; // Skip next token since we merged it
+                            continue;
+                        }
+                    } else if first_char.is_numeric() {
+                        // For numbers, split whitespace but keep them separate
+                        let space_chars: Vec<char> = mat.chars().collect();
+
+                        if space_chars.len() > 1 {
+                            // Split into n-1 spaces and 1 space (like slow version)
+                            let first_part: String = space_chars[..space_chars.len() - 1].iter().collect();
+                            let last_space: String = space_chars[space_chars.len() - 1].to_string();
+
+                            result.push(first_part);
+                            result.push(last_space);
+                            i += 1; // Continue to process next token normally
+                            continue;
+                        }
+                    } else if !first_char.is_whitespace() {
+                        // For punctuation/other non-whitespace, non-alphabetic, non-numeric
+                        // The pattern ` ?[^\s\p{L}\p{N}]+` matches space + punctuation
+                        // But we need to be careful not to create tokens that would be split by contractions
+
+                        // Check if next token starts with a single quote and could be a contraction
+                        if next.starts_with('\'') && next.len() > 1 {
+                            // Check if this could match a contraction pattern
+                            let next_lower = next.to_lowercase();
+                            if next_lower.starts_with("'s") || next_lower.starts_with("'t") ||
+                               next_lower.starts_with("'re") || next_lower.starts_with("'ve") ||
+                               next_lower.starts_with("'m") || next_lower.starts_with("'ll") ||
+                               next_lower.starts_with("'d") {
+                                // This is likely a contraction, don't merge space with it
+                                // Just split the whitespace normally
+                                let space_chars: Vec<char> = mat.chars().collect();
+                                if space_chars.len() > 1 {
+                                    let first_part: String = space_chars[..space_chars.len() - 1].iter().collect();
+                                    let last_space: String = space_chars[space_chars.len() - 1].to_string();
+                                    result.push(first_part);
+                                    result.push(last_space);
+                                    i += 1;
+                                    continue;
+                                }
+                            } else {
+                                // Check if it's punctuation followed by letters that could form 've', 're', etc.
+                                let has_letters = next.chars().skip(1).any(|c| c.is_alphabetic());
+
+                                if has_letters {
+                                    // This could be like 'verbose' - check if it would match contractions
+                                    let letter_part: String = next.chars().skip(1).collect();
+                                    if letter_part.to_lowercase().starts_with("ve") ||
+                                       letter_part.to_lowercase().starts_with("re") ||
+                                       letter_part.to_lowercase().starts_with("ll") ||
+                                       letter_part.to_lowercase().starts_with("s") ||
+                                       letter_part.to_lowercase().starts_with("t") ||
+                                       letter_part.to_lowercase().starts_with("m") ||
+                                       letter_part.to_lowercase().starts_with("d") {
+                                        // Would match a contraction pattern - keep them separate
+                                        let space_chars: Vec<char> = mat.chars().collect();
+                                        if space_chars.len() > 1 {
+                                            let first_part: String = space_chars[..space_chars.len() - 1].iter().collect();
+                                            let last_space: String = space_chars[space_chars.len() - 1].to_string();
+                                            result.push(first_part);
+                                            // Merge space with just the punctuation, not the letters
+                                            result.push(format!("{}{}", last_space, "'"));
+                                            // Add the letters separately
+                                            result.push(letter_part);
+                                            i += 2;
+                                            continue;
+                                        } else {
+                                            // Single space - merge with punctuation only
+                                            result.push(format!("{}{}", mat, "'"));
+                                            result.push(letter_part);
+                                            i += 2;
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // For other punctuation cases
+                        let next_chars: Vec<char> = next.chars().collect();
+                        let has_letters = next_chars.iter().skip(1).any(|c| c.is_alphabetic());
+
+                        if !first_char.is_alphabetic() && has_letters {
+                            // Punctuation followed by letters (but not contractions)
+                            let space_chars: Vec<char> = mat.chars().collect();
+
+                            if space_chars.len() > 1 {
+                                let first_part: String = space_chars[..space_chars.len() - 1].iter().collect();
+                                let last_space: String = space_chars[space_chars.len() - 1].to_string();
+
+                                result.push(first_part);
+
+                                // Split punctuation from letters
+                                let letter_start = next_chars.iter().position(|c| c.is_alphabetic()).unwrap_or(next_chars.len());
+                                if letter_start > 0 && letter_start < next_chars.len() {
+                                    let punct_part: String = next_chars[..letter_start].iter().collect();
+                                    let letter_part: String = next_chars[letter_start..].iter().collect();
+                                    result.push(format!("{}{}", last_space, punct_part));
+                                    result.push(letter_part);
+                                } else {
+                                    result.push(format!("{}{}", last_space, next));
+                                }
+                                i += 2;
+                                continue;
+                            } else {
+                                // Single space
+                                let letter_start = next_chars.iter().position(|c| c.is_alphabetic()).unwrap_or(next_chars.len());
+                                if letter_start > 0 && letter_start < next_chars.len() {
+                                    let punct_part: String = next_chars[..letter_start].iter().collect();
+                                    let letter_part: String = next_chars[letter_start..].iter().collect();
+                                    result.push(format!("{}{}", mat, punct_part));
+                                    result.push(letter_part);
+                                } else {
+                                    result.push(format!("{}{}", mat, next));
+                                }
+                                i += 2;
+                                continue;
+                            }
+                        } else if !next.starts_with(' ') {
+                            // Pure punctuation without letters
+                            let space_chars: Vec<char> = mat.chars().collect();
+
+                            if space_chars.len() > 1 {
+                                let first_part: String = space_chars[..space_chars.len() - 1].iter().collect();
+                                let last_space: String = space_chars[space_chars.len() - 1].to_string();
+
+                                result.push(first_part);
+                                result.push(format!("{}{}", last_space, next));
+                                i += 2;
+                                continue;
+                            } else {
+                                result.push(format!("{}{}", mat, next));
+                                i += 2;
+                                continue;
+                            }
+                        }
                     }
                 }
             }
