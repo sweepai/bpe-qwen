@@ -789,6 +789,7 @@ impl QwenTokenizer {
 
     /// Decode token IDs back to text
     fn decode(&self, tokens: Vec<u32>) -> PyResult<String> {
+        let mut result = String::new();
         let mut all_bytes = Vec::new();
 
         for token in tokens {
@@ -796,12 +797,12 @@ impl QwenTokenizer {
             if let Some(special_text) = self.special_token_ids.get(&token) {
                 // For special tokens, we need to flush any accumulated bytes first
                 if !all_bytes.is_empty() {
-                    // This shouldn't happen normally, but handle it gracefully
-                    let text = String::from_utf8_lossy(&all_bytes);
+                    // Convert accumulated bytes to string and append to result
+                    result.push_str(&String::from_utf8_lossy(&all_bytes));
                     all_bytes.clear();
                 }
-                // Special tokens are already valid UTF-8 strings
-                all_bytes.extend_from_slice(special_text.as_bytes());
+                // Special tokens are already valid UTF-8 strings, append directly
+                result.push_str(special_text);
             } else if let Some(&dedup_id) = self.token_id_map.get(&token) {
                 // Map to deduplicated index and decode
                 let bytes = self.bpe.decode_tokens(&[dedup_id]);
@@ -816,9 +817,13 @@ impl QwenTokenizer {
             }
         }
 
-        // Convert all collected bytes to string at the end
+        // Convert any remaining bytes to string at the end
         // This preserves multi-byte UTF-8 sequences that span multiple tokens
-        Ok(String::from_utf8_lossy(&all_bytes).into_owned())
+        if !all_bytes.is_empty() {
+            result.push_str(&String::from_utf8_lossy(&all_bytes));
+        }
+
+        Ok(result)
     }
 
     /// Encode text to token IDs and return as bytes
