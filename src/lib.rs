@@ -10,6 +10,7 @@ use std::path::Path;
 use bpe::byte_pair_encoding::BytePairEncoding;
 
 mod pretokenization;
+mod pretokenization_indices;
 use std::cell::RefCell;
 use std::borrow::Cow;
 use rayon::prelude::*;
@@ -932,11 +933,25 @@ fn pretokenize_fast(text: &str) -> PyResult<Vec<String>> {
     Ok(pretokenization::pretokenize_fast(text))
 }
 
+/// Expose the indices-based pretokenization (returns byte indices)
+#[pyfunction]
+fn pretokenize_fast_indices(text: &str) -> PyResult<Vec<(usize, usize)>> {
+    Ok(pretokenization_indices::pretokenize_fast_indices(text))
+}
+
+/// Convert indices to strings for testing
+#[pyfunction]
+fn indices_to_strings(text: &str, indices: Vec<(usize, usize)>) -> PyResult<Vec<String>> {
+    Ok(pretokenization_indices::indices_to_strings(text, &indices))
+}
+
 /// Python module definition
 #[pymodule]
 fn bpe_qwen(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<QwenTokenizer>()?;
     m.add_function(wrap_pyfunction!(pretokenize_slow, m)?)?;
     m.add_function(wrap_pyfunction!(pretokenize_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(pretokenize_fast_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(indices_to_strings, m)?)?;
     Ok(())
 }
