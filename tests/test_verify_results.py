@@ -86,9 +86,60 @@ def load_test_texts() -> List[str]:
         
         # Empty and whitespace edge cases
         "",
+        "I can't believe it's not butter.",
         " " * 100,
         "\n" * 50,
         "\t" * 20,
+
+        # Additional edge cases focused on pre-tokenization boundaries
+        # Contractions and apostrophes (straight and curly)
+        "it's we're they've he's we'll I'd",
+        "Y’all shouldn’t’ve done that.",
+        "rock ’n’ roll",
+        "can't\tstop\nwon't stop",
+
+        # Punctuation runs and operator boundaries
+        "Wait!!! Really???",  # repeated punctuation
+        "Hello -- world — okay...",  # hyphens, em-dash, ellipsis
+        '''"quote" \''single\'' “curly” ‘quotes’''',
+        "foo(bar); baz[0] = {x: 1};",  # brackets and punctuation
+        "if (a <= b) && (b != c) { x += 1; }",  # common operators
+
+        # Leading/trailing/mid spaces
+        "   leading spaces",
+        "trailing spaces   ",
+        " mid  spaces ",
+        " a",
+        "a",
+        " a ",
+
+        # Tabs and mixed indentation
+        "def f():\n\t\treturn 1",
+        "    indented\n  less",
+        "mix\t of\t tabs and  spaces",
+
+        # Unicode normalization edge cases
+        "Cafe\u0301 vs Café",  # combining vs composed
+        "zero\u200Bwidth",  # zero width space
+        "NBSP: \u00A0here",  # non-breaking space
+
+        # Emoji sequences and variation selectors
+        "family: 👨‍👩‍👧‍👦 and flags: 🇺🇸 🇨🇦",
+        "emoji VS16: 🙂 and 🙂\uFE0F mixed",
+
+        # URLs, emails, identifiers
+        "Visit https://example.com/?q=tokenize&lang=en",
+        "Contact me at user+test@example.co.uk",
+        "snake_case and camelCase plus v2alpha",
+
+        # CJK with punctuation
+        "你好，世界！混合ASCII, punctuation!",
+        "日本語のテキスト—ダッシュと句読点。",
+        "العَرَبِيَّةُ مع التشكيل",  # Arabic with diacritics
+
+        # Special tokens with surrounding spaces
+        " <|im_start|> ",
+        "text<|endoftext|>more",
     ]
 
 def verify_tokenization(qwen_tokenizer, hf_tokenizer, text: str) -> Tuple[bool, str, List[int], List[int], float]:
