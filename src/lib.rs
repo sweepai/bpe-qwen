@@ -11,6 +11,7 @@ use bpe::byte_pair_encoding::BytePairEncoding;
 
 mod pretokenization;
 mod pretokenization_indices;
+mod pretokenization_automata;
 use std::cell::RefCell;
 use std::borrow::Cow;
 use rayon::prelude::*;
@@ -945,6 +946,12 @@ fn indices_to_strings(text: &str, indices: Vec<(usize, usize)>) -> PyResult<Vec<
     Ok(pretokenization_indices::indices_to_strings(text, &indices))
 }
 
+/// Expose the automata-based pretokenization (single pass, no regex)
+#[pyfunction]
+fn pretokenize_automata(text: &str) -> PyResult<Vec<String>> {
+    Ok(pretokenization_automata::pretokenize_automata(text))
+}
+
 /// Python module definition
 #[pymodule]
 fn bpe_qwen(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -953,5 +960,6 @@ fn bpe_qwen(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pretokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(pretokenize_fast_indices, m)?)?;
     m.add_function(wrap_pyfunction!(indices_to_strings, m)?)?;
+    m.add_function(wrap_pyfunction!(pretokenize_automata, m)?)?;
     Ok(())
 }
