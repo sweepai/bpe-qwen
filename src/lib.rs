@@ -906,9 +906,23 @@ fn decode_gpt2_bytes(token: &str) -> Vec<u8> {
     bytes
 }
 
+/// Expose the slow pretokenization (using fancy-regex with lookahead)
+#[pyfunction]
+fn pretokenize_slow(text: &str) -> PyResult<Vec<String>> {
+    Ok(pretokenization::pretokenize_slow(text))
+}
+
+/// Expose the fast pretokenization (using standard regex with correction pass)
+#[pyfunction]
+fn pretokenize_fast(text: &str) -> PyResult<Vec<String>> {
+    Ok(pretokenization::pretokenize_fast(text))
+}
+
 /// Python module definition
 #[pymodule]
 fn bpe_qwen(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<QwenTokenizer>()?;
+    m.add_function(wrap_pyfunction!(pretokenize_slow, m)?)?;
+    m.add_function(wrap_pyfunction!(pretokenize_fast, m)?)?;
     Ok(())
 }
