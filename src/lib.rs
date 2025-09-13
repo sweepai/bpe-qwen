@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use serde::Deserialize;
 use std::collections::HashMap;
-use regex::Regex;
+use fancy_regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 use serde_json::Value;
 use std::path::Path;
@@ -226,7 +226,10 @@ fn encode_text_parallel(
     
     // Apply regex if present
     if let Some(regex) = pre_tokenizer_regex {
-        for mat in regex.find_iter(text) {
+        let matches: Vec<_> = regex.find_iter(text)
+            .filter_map(|m| m.ok())
+            .collect();
+        for mat in matches {
             let piece = mat.as_str();
             
             // Check for special tokens first
@@ -479,8 +482,26 @@ impl QwenTokenizer {
             }
         }
 
-        // Skip regex pretokenization for maximum performance
-        let pre_tokenizer_regex = None;
+        // Use the Qwen pre-tokenization regex pattern, or custom if provided
+        let pre_tokenizer_regex = if let Some(custom_pattern) = pretokenize_regex {
+            match Regex::new(custom_pattern) {
+                Ok(regex) => Some(regex),
+                Err(e) => {
+                    println!("Warning: Failed to compile custom pre-tokenization regex: {}", e);
+                    None
+                }
+            }
+        } else {
+            // Default Qwen pre-tokenization pattern (with lookahead support via fancy-regex)
+            let default_pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
+            match Regex::new(default_pattern) {
+                Ok(regex) => Some(regex),
+                Err(e) => {
+                    println!("Warning: Failed to compile default pre-tokenization regex: {}", e);
+                    None
+                }
+            }
+        };
 
         Ok(QwenTokenizer {
             bpe,
@@ -586,10 +607,12 @@ impl QwenTokenizer {
         if let Some(ref regex) = self.pre_tokenizer_regex {
             // Apply pre-tokenization using regex
             let mut all_tokens = self.vector_pool.get_buffer(128);  // Get from pool
-            
-            // Use standard regex which doesn't return Results
-            let matches: Vec<_> = regex.find_iter(text).collect();
-            
+
+            // fancy-regex returns Results, so we need to handle them
+            let matches: Vec<_> = regex.find_iter(text)
+                .filter_map(|m| m.ok())
+                .collect();
+
             for mat in matches {
                 let piece = mat.as_str();
                 // Convert to bytes for BPE encoding
@@ -812,8 +835,10 @@ impl QwenTokenizer {
         
         if let Some(ref regex) = self.pre_tokenizer_regex {
             // fancy_regex returns Results, so we need to handle them
-            let matches: Vec<_> = regex.find_iter(&normalized).collect();
-            
+            let matches: Vec<_> = regex.find_iter(&normalized)
+                .filter_map(|m| m.ok())
+                .collect();
+
             for mat in matches {
                 let piece_bytes = mat.as_str().as_bytes();
                 count += self.bpe.count(piece_bytes);
