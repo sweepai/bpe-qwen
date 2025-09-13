@@ -224,8 +224,10 @@ def main():
             print(f"\n{i}. Text: {case['preview']}")
             print(f"   Error: {case['error']}")
             print(f"   Difference: {case['diff_percentage']:.1f}%")
-            print(f"   bpe-qwen tokens: {case['qwen_tokens']}")
-            print(f"   HuggingFace tokens: {case['hf_tokens']}")
+            hf_tokens = [hf_tokenizer.decode([token]) for token in case['hf_tokens']]
+            print(f"   HuggingFace decoded: {hf_tokens}")
+            qwen_tokens = [qwen_tokenizer.decode([token]) for token in case['qwen_tokens']]
+            print(f"   bpe-qwen decoded: {qwen_tokens}")
     
     # Test performance on larger text
     print("\n" + "="*80)
