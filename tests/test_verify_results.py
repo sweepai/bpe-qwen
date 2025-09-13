@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bpe_qwen
 import json
+import difflib
 from typing import List, Tuple
 
 def install_transformers():
@@ -90,10 +91,10 @@ def load_test_texts() -> List[str]:
         "\t" * 20,
     ]
 
-def verify_tokenization(qwen_tokenizer, hf_tokenizer, text: str) -> Tuple[bool, str, List[int], List[int]]:
+def verify_tokenization(qwen_tokenizer, hf_tokenizer, text: str) -> Tuple[bool, str, List[int], List[int], float]:
     """
     Verify that both tokenizers produce identical results.
-    Returns: (match, error_msg, qwen_tokens, hf_tokens)
+    Returns: (match, error_msg, qwen_tokens, hf_tokens, diff_percentage)
     """
     try:
         # Encode with our tokenizer
@@ -102,6 +103,21 @@ def verify_tokenization(qwen_tokenizer, hf_tokenizer, text: str) -> Tuple[bool, 
         # Encode with HuggingFace
         hf_tokens = hf_tokenizer(text, return_tensors=None, add_special_tokens=False)['input_ids']
         
+        # Calculate difference percentage using difflib
+        def calculate_diff_percentage(tokens1, tokens2):
+            if len(tokens1) == 0 and len(tokens2) == 0:
+                return 0.0
+
+            # Use difflib.SequenceMatcher to calculate similarity ratio
+            matcher = difflib.SequenceMatcher(None, tokens1, tokens2)
+            similarity_ratio = matcher.ratio()
+
+            # Convert similarity to difference percentage
+            difference_percentage = (1.0 - similarity_ratio) * 100.0
+            return difference_percentage
+
+        diff_percentage = calculate_diff_percentage(qwen_tokens, hf_tokens)
+
         # Check if tokens match
         if qwen_tokens == hf_tokens:
             # Also verify decoding
@@ -110,18 +126,18 @@ def verify_tokenization(qwen_tokenizer, hf_tokenizer, text: str) -> Tuple[bool, 
             
             # For empty or whitespace-only text, both might normalize differently
             if text.strip() == "":
-                return True, "", qwen_tokens, hf_tokens
-                
+                return True, "", qwen_tokens, hf_tokens, diff_percentage
+
             # Check if decoded text matches (allowing for some normalization differences)
             if qwen_decoded == hf_decoded or qwen_decoded.strip() == hf_decoded.strip():
-                return True, "", qwen_tokens, hf_tokens
+                return True, "", qwen_tokens, hf_tokens, diff_percentage
             else:
-                return False, f"Decoded text mismatch: '{qwen_decoded}' vs '{hf_decoded}'", qwen_tokens, hf_tokens
+                return False, f"Decoded text mismatch: '{qwen_decoded}' vs '{hf_decoded}'", qwen_tokens, hf_tokens, diff_percentage
         else:
-            return False, f"Token mismatch: {qwen_tokens[:10]}... vs {hf_tokens[:10]}...", qwen_tokens, hf_tokens
+            return False, f"Token mismatch: {qwen_tokens[:10]}... vs {hf_tokens[:10]}... (diff: {diff_percentage:.1f}%)", qwen_tokens, hf_tokens, diff_percentage
             
     except Exception as e:
-        return False, f"Exception: {str(e)}", [], []
+        return False, f"Exception: {str(e)}", [], [], 0.0
 
 def main():
     """Main test function."""
@@ -163,7 +179,8 @@ def main():
     passed = 0
     failed = 0
     failed_cases = []
-    
+    total_diff_percentage = 0.0
+
     # Test each text
     for i, text in enumerate(test_texts):
         # Show progress
@@ -171,8 +188,11 @@ def main():
             print(f"  Testing {i}/{len(test_texts)}...")
         
         # Verify tokenization
-        match, error_msg, qwen_tokens, hf_tokens = verify_tokenization(qwen_tokenizer, hf_tokenizer, text)
-        
+        match, error_msg, qwen_tokens, hf_tokens, diff_percentage = verify_tokenization(qwen_tokenizer, hf_tokenizer, text)
+
+        # Add to total difference percentage
+        total_diff_percentage += diff_percentage
+
         if match:
             passed += 1
         else:
@@ -184,6 +204,7 @@ def main():
                 "error": error_msg,
                 "qwen_tokens": qwen_tokens[:20],  # First 20 tokens
                 "hf_tokens": hf_tokens[:20],
+                "diff_percentage": diff_percentage,
             })
     
     # Print results
@@ -192,12 +213,17 @@ def main():
     print("="*80)
     print(f"Passed: {passed}/{len(test_texts)} ({passed/len(test_texts)*100:.1f}%)")
     print(f"Failed: {failed}/{len(test_texts)}")
-    
+
+    # Calculate and display average difference percentage
+    average_diff_percentage = total_diff_percentage / len(test_texts)
+    print(f"Average difference: {average_diff_percentage:.2f}%")
+
     if failed > 0:
         print("\nFailed cases:")
         for i, case in enumerate(failed_cases[:10], 1):  # Show first 10 failures
             print(f"\n{i}. Text: {case['preview']}")
             print(f"   Error: {case['error']}")
+            print(f"   Difference: {case['diff_percentage']:.1f}%")
             print(f"   bpe-qwen tokens: {case['qwen_tokens']}")
             print(f"   HuggingFace tokens: {case['hf_tokens']}")
     
