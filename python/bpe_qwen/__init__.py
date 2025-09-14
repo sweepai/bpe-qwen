@@ -22,4 +22,4 @@ else:
     __all__ = ["QwenTokenizer", "patch_transformers", "unpatch_transformers", "QwenTokenizerFast",
                "AutoLinearTokenizer", "QwenLinearTokenizer", "get_tokenizer",
                "pretokenize_slow", "pretokenize_fast", "pretokenize_fast_indices",
-               "indices_to_strings", "pretokenize_automata"]
+               "indices_to_strings"]
