@@ -139,10 +139,9 @@ python benchmark.py
 - [ ] **Profile-guided optimization**: Workload-specific optimizations based on production usage patterns
 
 ### Feature Enhancements
+- [ ] Early stopping for tokenization based on token count
 - [ ] Support for more model architectures
-- [ ] Streaming tokenization for large documents  
 - [ ] Batch processing optimizations
-- [ ] Direct tokenizer.json support
 
 ## Acknowledgments
 
