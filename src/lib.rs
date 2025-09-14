@@ -211,7 +211,7 @@ struct AddedToken {
     special: bool,
 }
 
-/// Helper function for parallel encoding without vector pool
+/// Helper function for parallel encoding without vector pool using indices
 fn encode_text_parallel(
     text: &str,
     bpe: &BytePairEncoding,
@@ -227,23 +227,27 @@ fn encode_text_parallel(
     // Create a fresh buffer for this thread
     let mut all_tokens = Vec::with_capacity(128);
 
-    // Use the globally precompiled regex for pretokenization
-    let pretokens = crate::pretokenization::pretokenize_fast(text);
+    // Use the indices-based pretokenization for better performance
+    let end_indices = crate::pretokenization_indices::pretokenize_fast_indices(text);
 
-    for piece in pretokens {
+    let mut start = 0;
+    for &end in &end_indices {
+        let piece = &text[start..end];
+        start = end;
+
         if piece.is_empty() {
             continue;
         }
 
         // Check for special tokens first
-        if let Some(&token_id) = special_tokens.get(&piece) {
+        if let Some(&token_id) = special_tokens.get(piece) {
             all_tokens.push(token_id);
             continue;
         }
 
         // Normalization: NFC normalize only when needed (non-ASCII with NFC normalizer)
         let normalized = if let Some(ref nt) = normalizer_type {
-            if nt == "NFC" && !is_ascii_fast(&piece) {
+            if nt == "NFC" && !is_ascii_fast(piece) {
                 // Use Cow to avoid allocation when possible
                 Cow::from(piece.nfc().collect::<String>())
             } else {
@@ -554,17 +558,21 @@ impl QwenTokenizer {
         Ok(result)
     }
 
-    /// Internal method to encode regular text
+    /// Internal method to encode regular text using indices-based pretokenization
     fn encode_regular(&self, text: &str) -> PyResult<Vec<u32>> {
-        // Apply pre-tokenization using the globally precompiled regex
+        // Apply pre-tokenization using indices for better performance
         let mut all_tokens = self.vector_pool.get_buffer(128);  // Get from pool
 
-        // Use the fast pretokenization with the globally precompiled regex
-        let pretokens = crate::pretokenization::pretokenize_fast(text);
+        // Use the indices-based pretokenization for better performance
+        let end_indices = crate::pretokenization_indices::pretokenize_fast_indices(text);
 
         // Pass 1: Collect all dedup tokens from BPE encoding
         let mut all_dedup_tokens = Vec::new();
-        for piece in pretokens {
+        let mut start = 0;
+        for &end in &end_indices {
+            let piece = &text[start..end];
+            start = end;
+
             if piece.is_empty() {
                 continue;
             }
@@ -761,7 +769,7 @@ impl QwenTokenizer {
         self.bpe.num_tokens() + self.special_tokens.len()
     }
 
-    /// Count tokens without full encoding (fast!)
+    /// Count tokens without full encoding (fast!) using indices-based pretokenization
     fn count_tokens(&self, text: &str) -> PyResult<usize> {
         // Apply normalization
         let normalized = if let Some(ref norm_type) = self.normalizer_type {
@@ -773,11 +781,15 @@ impl QwenTokenizer {
             text.to_string()
         };
 
-        // Use the fast count method from BPE with global regex pretokenization
+        // Use the fast count method from BPE with indices-based pretokenization
         let mut count = 0;
-        let pretokens = crate::pretokenization::pretokenize_fast(&normalized);
+        let end_indices = crate::pretokenization_indices::pretokenize_fast_indices(&normalized);
 
-        for piece in pretokens {
+        let mut start = 0;
+        for &end in &end_indices {
+            let piece = &normalized[start..end];
+            start = end;
+
             if !piece.is_empty() {
                 let piece_bytes = piece.as_bytes();
                 count += self.bpe.count(piece_bytes);
@@ -849,16 +861,16 @@ fn pretokenize_fast(text: &str) -> PyResult<Vec<String>> {
     Ok(pretokenization::pretokenize_fast(text))
 }
 
-/// Expose the indices-based pretokenization (returns byte indices)
+/// Expose the indices-based pretokenization (returns end positions only)
 #[pyfunction]
-fn pretokenize_fast_indices(text: &str) -> PyResult<Vec<(usize, usize)>> {
+fn pretokenize_fast_indices(text: &str) -> PyResult<Vec<usize>> {
     Ok(pretokenization_indices::pretokenize_fast_indices(text))
 }
 
-/// Convert indices to strings for testing
+/// Convert end indices to strings for testing
 #[pyfunction]
-fn indices_to_strings(text: &str, indices: Vec<(usize, usize)>) -> PyResult<Vec<String>> {
-    Ok(pretokenization_indices::indices_to_strings(text, &indices))
+fn indices_to_strings(text: &str, end_indices: Vec<usize>) -> PyResult<Vec<String>> {
+    Ok(pretokenization_indices::indices_to_strings(text, &end_indices))
 }
 
 /// Expose the automata-based pretokenization (single pass, no regex)

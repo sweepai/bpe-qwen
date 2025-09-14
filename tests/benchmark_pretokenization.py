@@ -112,7 +112,7 @@ def benchmark_pretokenization():
     """Benchmark the exposed pretokenization functions"""
 
     print("=" * 80)
-    print("PRETOKENIZATION BENCHMARK: Fast (two-pass) vs Slow (fancy-regex)")
+    print("PRETOKENIZATION BENCHMARK: Fast vs Slow vs Indices")
     print("=" * 80)
 
     for name, text in TEST_STRINGS.items():
@@ -129,10 +129,11 @@ def benchmark_pretokenization():
         else:
             iterations = 3
 
-        # Warm up both methods
+        # Warm up all methods
         for _ in range(2):
             _ = bpe_qwen.pretokenize_slow(text)
             _ = bpe_qwen.pretokenize_fast(text)
+            _ = bpe_qwen.pretokenize_fast_indices(text)
 
         # Benchmark slow (fancy-regex with lookahead)
         start = time.perf_counter()
@@ -146,28 +147,68 @@ def benchmark_pretokenization():
             fast_result = bpe_qwen.pretokenize_fast(text)
         fast_time = (time.perf_counter() - start) / iterations
 
+        # Benchmark indices (returns list of end positions)
+        start = time.perf_counter()
+        for _ in range(iterations):
+            indices_result = bpe_qwen.pretokenize_fast_indices(text)
+        indices_time = (time.perf_counter() - start) / iterations
+
+        # Convert indices to strings for comparison
+        indices_strings = bpe_qwen.indices_to_strings(text, indices_result)
+
         # Check correctness and find differences
-        if slow_result == fast_result:
-            correctness = "✓ MATCH"
+        slow_fast_match = slow_result == fast_result
+        slow_indices_match = slow_result == indices_strings
+        fast_indices_match = fast_result == indices_strings
+
+        if slow_fast_match and slow_indices_match and fast_indices_match:
+            correctness = "✓ ALL MATCH"
             delta_info = ""
         else:
-            correctness = f"✗ MISMATCH ({len(slow_result)} vs {len(fast_result)} tokens)"
+            mismatch_parts = []
+            if not slow_fast_match:
+                mismatch_parts.append("slow≠fast")
+            if not slow_indices_match:
+                mismatch_parts.append("slow≠indices")
+            if not fast_indices_match:
+                mismatch_parts.append("fast≠indices")
+
+            correctness = f"✗ MISMATCH ({', '.join(mismatch_parts)})"
 
             # Find the first few differences
             max_show = 5
             differences = []
-            for i in range(min(len(slow_result), len(fast_result))):
-                if slow_result[i] != fast_result[i]:
-                    differences.append(f"    Position {i}: slow={repr(slow_result[i])} vs fast={repr(fast_result[i])}")
-                    if len(differences) >= max_show:
-                        break
+
+            # Compare slow vs fast
+            if not slow_fast_match:
+                differences.append("  Slow vs Fast:")
+                for i in range(min(len(slow_result), len(fast_result))):
+                    if slow_result[i] != fast_result[i]:
+                        differences.append(f"    Position {i}: slow={repr(slow_result[i])} vs fast={repr(fast_result[i])}")
+                        if len(differences) >= max_show:
+                            break
+
+            # Compare slow vs indices
+            if not slow_indices_match:
+                differences.append("  Slow vs Indices:")
+                for i in range(min(len(slow_result), len(indices_strings))):
+                    if slow_result[i] != indices_strings[i]:
+                        differences.append(f"    Position {i}: slow={repr(slow_result[i])} vs indices={repr(indices_strings[i])}")
+                        if len(differences) >= max_show:
+                            break
 
             # Check for length differences
             if len(slow_result) != len(fast_result):
                 if len(slow_result) > len(fast_result):
-                    differences.append(f"    Slow has {len(slow_result) - len(fast_result)} extra tokens at end")
+                    differences.append(f"    Slow has {len(slow_result) - len(fast_result)} extra tokens vs fast")
                 else:
-                    differences.append(f"    Fast has {len(fast_result) - len(slow_result)} extra tokens at end")
+                    differences.append(f"    Fast has {len(fast_result) - len(slow_result)} extra tokens vs slow")
+
+            if len(slow_result) != len(indices_strings):
+                if len(slow_result) > len(indices_strings):
+                    differences.append(f"    Slow has {len(slow_result) - len(indices_strings)} extra tokens vs indices")
+                else:
+                    differences.append(f"    Indices has {len(indices_strings) - len(slow_result)} extra tokens vs slow")
 
             if differences:
                 delta_info = "\n  Differences:\n" + "\n".join(differences[:max_show])
@@ -177,14 +218,20 @@ def benchmark_pretokenization():
                 delta_info = ""
 
         # Calculate metrics
-        speedup = slow_time / fast_time if fast_time > 0 else 0
+        speedup_fast = slow_time / fast_time if fast_time > 0 else 0
+        speedup_indices = slow_time / indices_time if indices_time > 0 else 0
         throughput_slow = len(text) / slow_time / 1_000_000 if slow_time > 0 else 0
         throughput_fast = len(text) / fast_time / 1_000_000 if fast_time > 0 else 0
+        throughput_indices = len(text) / indices_time / 1_000_000 if indices_time > 0 else 0
 
         print(f"  Slow (fancy-regex):  {slow_time*1000:.3f} ms  ({throughput_slow:.2f} MB/s)")
         print(f"  Fast (two-pass):     {fast_time*1000:.3f} ms  ({throughput_fast:.2f} MB/s)")
-        print(f"  Speedup:             {speedup:.2f}x")
+        print(f"  Indices (end-only):  {indices_time*1000:.3f} ms  ({throughput_indices:.2f} MB/s)")
+        print(f"  Fast vs Slow:        {speedup_fast:.2f}x speedup")
+        print(f"  Indices vs Slow:     {speedup_indices:.2f}x speedup")
+        print(f"  Indices vs Fast:     {fast_time/indices_time:.2f}x speedup" if indices_time > 0 else "  Indices vs Fast:     ∞x speedup")
         print(f"  Tokens produced:     {len(fast_result)}")
+        print(f"  Indices produced:    {len(indices_result)}")
         print(f"  Correctness:         {correctness}")
         if delta_info:
             print(delta_info)

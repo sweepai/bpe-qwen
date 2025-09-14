@@ -11,7 +11,7 @@ pub const QWEN_PATTERN_WITH_LOOKAHEAD: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\
 pub const QWEN_PATTERN_WITHOUT_LOOKAHEAD: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
 
 /// Globally precompiled regex for maximum performance
-static GLOBAL_QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
+pub static GLOBAL_QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
 
 /// Globally precompiled fancy regex for the slow implementation
 static GLOBAL_QWEN_FANCY_REGEX: OnceLock<FancyRegex> = OnceLock::new();

@@ -1,19 +1,13 @@
-use regex::Regex;
+use crate::pretokenization::GLOBAL_QWEN_REGEX;
 
-/// Pretokenization that returns byte indices instead of string slices
-/// This avoids string allocations and makes the second pass more efficient
+/// Fast pretokenization that returns only end positions of tokens
 /// Returns only end positions since start of next token = end of previous token
+/// Implements the same complex algorithm as pretokenization.rs but with indices only
 pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
-    // Use the same pattern as pretokenization.rs without lookahead
-    let pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
-    let re = Regex::new(pattern).expect("Failed to compile regex");
+    let regex = GLOBAL_QWEN_REGEX.get().expect("Global regex not initialized");
 
     // First pass: collect all regex matches
-    let matches: Vec<_> = re.find_iter(text).collect();
-
-    if matches.is_empty() {
-        return Vec::new();
-    }
+    let matches: Vec<_> = regex.find_iter(text).collect();
 
     // Second pass: fix incorrectly split contractions and apply whitespace correction
     let mut result = Vec::with_capacity(matches.len());
@@ -21,6 +15,8 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
 
     while i < matches.len() {
         let mat = matches[i];
+        let start = mat.start();
+        let end = mat.end();
         let mat_str = mat.as_str();
 
         // Check if this match starts with a double quote and we have a closing quote next
@@ -62,8 +58,11 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
                     }) {
                         // Check if we just added a whitespace token that should have the quote attached
                         if !result.is_empty() {
-                            let last_end = if result.len() == 1 { 0 } else { result[result.len() - 2] };
-                            let last_token = &text[last_end..result[result.len() - 1]];
+                            // Reconstruct what the last token was
+                            let last_end = result[result.len() - 1];
+                            let last_start = if result.len() == 1 { 0 } else { result[result.len() - 2] };
+                            let last_token = &text[last_start..last_end];
+
                             if last_token == " " {
                                 // Pop the single space and replace with space + quote
                                 result.pop();
@@ -105,7 +104,7 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
 
                         if space_chars.len() > 1 {
                             // Keep all but last space as separate token
-                            let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                            let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
                             result.push(split_pos);
                             // Merge last space with next token
                             result.push(matches[i + 1].end());
@@ -123,9 +122,9 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
 
                         if space_chars.len() > 1 {
                             // Split into n-1 spaces and 1 space (like slow version)
-                            let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                            let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
                             result.push(split_pos);
-                            result.push(mat.end());
+                            result.push(end);
                             i += 1; // Continue to process next token normally
                             continue;
                         }
@@ -146,9 +145,9 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
                                 // Just split the whitespace normally
                                 let space_chars: Vec<char> = mat_str.chars().collect();
                                 if space_chars.len() > 1 {
-                                    let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                                    let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
                                     result.push(split_pos);
-                                    result.push(mat.end());
+                                    result.push(end);
                                     i += 1;
                                     continue;
                                 }
@@ -169,7 +168,7 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
                                         // Would match a contraction pattern - keep them separate
                                         let space_chars: Vec<char> = mat_str.chars().collect();
                                         if space_chars.len() > 1 {
-                                            let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                                            let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
                                             result.push(split_pos);
                                             // Merge space with just the punctuation, not the letters
                                             let punct_end = matches[i + 1].start() + "'".len();
@@ -200,7 +199,7 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
                             let space_chars: Vec<char> = mat_str.chars().collect();
 
                             if space_chars.len() > 1 {
-                                let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                                let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
                                 result.push(split_pos);
 
                                 // Split punctuation from letters
@@ -232,7 +231,7 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
                             let space_chars: Vec<char> = mat_str.chars().collect();
 
                             if space_chars.len() > 1 {
-                                let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                                let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
                                 result.push(split_pos);
                                 result.push(matches[i + 1].end());
                                 i += 2;
@@ -249,11 +248,41 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
         }
 
         // Default case: keep the match as-is
-        result.push(mat.end());
+        result.push(end);
         i += 1;
     }
 
     result
+}
+
+/// Check if all bytes represent whitespace characters (fast ASCII check)
+fn is_all_whitespace_bytes(bytes: &[u8]) -> bool {
+    bytes.iter().all(|&b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+}
+
+/// Check if bytes contain newlines
+fn contains_newlines(bytes: &[u8]) -> bool {
+    bytes.iter().any(|&b| matches!(b, b'\n' | b'\r'))
+}
+
+/// Check if first byte indicates alphabetic start (ASCII only for speed)
+fn is_alphabetic_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic()
+}
+
+/// Check if first byte indicates numeric start
+fn is_numeric_start(byte: u8) -> bool {
+    byte.is_ascii_digit()
+}
+
+/// Check if bytes contain any ASCII digits
+fn has_digits_bytes(bytes: &[u8]) -> bool {
+    bytes.iter().any(|&b| b.is_ascii_digit())
+}
+
+/// Check if all bytes are ASCII digits
+fn is_all_digits(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.iter().all(|&b| b.is_ascii_digit())
 }
 
 /// Convert end indices to actual string slices for testing
