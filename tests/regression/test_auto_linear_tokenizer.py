@@ -8,6 +8,8 @@ for HuggingFace's AutoTokenizer, focusing on real functionality rather than mock
 
 import pytest
 
+from transformers import AutoTokenizer
+
 from bpe_qwen.auto_linear_tokenizer import AutoLinearTokenizer, QwenLinearTokenizer, get_tokenizer
 
 
@@ -193,6 +195,7 @@ class TestCompatibilityWithHuggingFace:
         tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
         texts = ["Hello world", "How are you?", "Fine thanks"]
+        # texts = ["<|file_sep|>src/server/template-renderer/index.ts\nconst path = require('path')\nconst serialize"]
 
         # Test basic batch encoding
         result = tokenizer.batch_encode_plus(texts)
@@ -266,6 +269,74 @@ class TestCompatibilityWithHuggingFace:
         result = tokenizer.save_vocabulary("/tmp/test_vocab")
         assert isinstance(result, tuple)  # Should return tuple as per HF interface
 
+    def test_linear_tokenization_method(self):
+        """Test linear tokenization method compatibility with HuggingFace interface."""
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
+        huggingface_tokenizer = AutoTokenizer.from_pretrained("data")
+
+        # Test texts and their ground truth equivalents
+        texts = [
+            "Hello, world!",
+            "This is a test sentence.",
+            "Another example text for testing."
+        ]
+        
+        # Test linear tokenization using __call__ method
+        linear_tokenized = tokenizer(texts)["input_ids"]
+        huggingface_tokenized = huggingface_tokenizer(texts)["input_ids"]
+
+        # Verify structure and types
+        assert isinstance(linear_tokenized, list)
+        assert len(linear_tokenized) == len(texts)
+
+        # Each tokenized result should be a list of integers
+        for token_list in linear_tokenized:
+            assert isinstance(token_list, list)
+            assert all(isinstance(token, int) for token in token_list)
+
+        # Verify that linear tokenization matches HuggingFace tokenizer
+        assert linear_tokenized == huggingface_tokenized
+
+        # Test with different texts to ensure method works with varied input
+        different_texts = ["Short", "A much longer text with more words"]
+        different_tokenized = tokenizer(different_texts)["input_ids"]
+
+        assert len(different_tokenized) == len(different_texts)
+        assert len(different_tokenized[0]) != len(different_tokenized[1])  # Different lengths expected
+
+    def test_linear_tokenization_special_tokens(self):
+        """Test linear tokenization method compatibility with HuggingFace interface."""
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
+        huggingface_tokenizer = AutoTokenizer.from_pretrained("data")
+
+        # Test texts and their ground truth equivalents
+        texts = [
+            "<|file_sep|>",
+            "<|file_sep|>abcdefg",
+        ]
+
+        # Test linear tokenization using __call__ method
+        linear_tokenized = tokenizer(texts)["input_ids"]
+        huggingface_tokenized = huggingface_tokenizer(texts)["input_ids"]
+
+        # Verify structure and types
+        assert isinstance(linear_tokenized, list)
+        assert len(linear_tokenized) == len(texts)
+
+        # Each tokenized result should be a list of integers
+        for token_list in linear_tokenized:
+            assert isinstance(token_list, list)
+            assert all(isinstance(token, int) for token in token_list)
+
+        # Verify that linear tokenization matches HuggingFace tokenizer
+        assert linear_tokenized == huggingface_tokenized
+
+        # Test with different texts to ensure method works with varied input
+        different_texts = ["Short", "A much longer text with more words"]
+        different_tokenized = tokenizer(different_texts)["input_ids"]
+
+        assert len(different_tokenized) == len(different_texts)
+        assert len(different_tokenized[0]) != len(different_tokenized[1])  # Different lengths expected
 
 class TestParallelization:
     """Test parallelization functionality."""
