@@ -160,7 +160,80 @@ fn encode_text_parallel(
     if text.is_empty() {
         return Ok(Vec::new());
     }
-    
+
+    // Apply normalization if configured - use Cow to avoid allocation when not normalizing
+    let normalized: Cow<str> = if let Some(ref norm_type) = normalizer_type {
+        if is_ascii_fast(text) {
+            Cow::Borrowed(text)  // Zero-copy for ASCII text
+        } else {
+            match norm_type.as_str() {
+                "NFC" => Cow::Owned(text.nfc().collect::<String>()),
+                "NFD" => Cow::Owned(text.nfd().collect::<String>()),
+                "NFKC" => Cow::Owned(text.nfkc().collect::<String>()),
+                "NFKD" => Cow::Owned(text.nfkd().collect::<String>()),
+                _ => Cow::Borrowed(text),
+            }
+        }
+    } else {
+        Cow::Borrowed(text)  // Zero-copy when no normalization
+    };
+
+    // Handle special tokens - find all occurrences and their positions
+    let mut special_token_positions = Vec::new();
+    for (special_text, &special_id) in special_tokens {
+        let mut search_pos = 0;
+        while let Some(pos) = normalized[search_pos..].find(special_text) {
+            let actual_pos = search_pos + pos;
+            special_token_positions.push((actual_pos, special_text.len(), special_id));
+            search_pos = actual_pos + special_text.len();
+        }
+    }
+
+    // Sort by position
+    special_token_positions.sort_by_key(|&(pos, _, _)| pos);
+
+    // If we have special tokens, split and encode
+    let result = if !special_token_positions.is_empty() {
+        let mut result = Vec::new();
+        let mut last_end = 0;
+
+        for (start, len, token_id) in special_token_positions {
+            // Encode text before the special token
+            if start > last_end {
+                let part = &normalized[last_end..start];
+                if !part.is_empty() {
+                    let tokens = encode_regular_parallel(part, bpe, reverse_token_id_vec)?;
+                    result.extend(tokens);
+                }
+            }
+            // Add the special token
+            result.push(token_id);
+            last_end = start + len;
+        }
+
+        // Encode any remaining text after the last special token
+        if last_end < normalized.len() {
+            let part = &normalized[last_end..];
+            if !part.is_empty() {
+                let tokens = encode_regular_parallel(part, bpe, reverse_token_id_vec)?;
+                result.extend(tokens);
+            }
+        }
+
+        result
+    } else {
+        encode_regular_parallel(&normalized, bpe, reverse_token_id_vec)?
+    };
+
+    Ok(result)
+}
+
+/// Helper function for encoding regular text in parallel (without special token handling)
+fn encode_regular_parallel(
+    text: &str,
+    bpe: &BytePairEncoding,
+    reverse_token_id_vec: &Vec<u32>,
+) -> Result<Vec<u32>, String> {
     // Create a fresh buffer for this thread
     let mut all_tokens = Vec::with_capacity(128);
 
@@ -176,26 +249,8 @@ fn encode_text_parallel(
             continue;
         }
 
-        // Check for special tokens first
-        if let Some(&token_id) = special_tokens.get(piece) {
-            all_tokens.push(token_id);
-            continue;
-        }
-
-        // Normalization: NFC normalize only when needed (non-ASCII with NFC normalizer)
-        let normalized = if let Some(ref nt) = normalizer_type {
-            if nt == "NFC" && !is_ascii_fast(piece) {
-                // Use Cow to avoid allocation when possible
-                Cow::from(piece.nfc().collect::<String>())
-            } else {
-                Cow::from(piece)
-            }
-        } else {
-            Cow::from(piece)
-        };
-
         // BPE tokenization
-        let dedup_tokens = bpe.encode_via_backtracking(normalized.as_bytes());
+        let dedup_tokens = bpe.encode_via_backtracking(piece.as_bytes());
 
         // Map from deduplicated indices to original token IDs
         for dedup_id in dedup_tokens {
