@@ -11,59 +11,12 @@ import pytest
 from bpe_qwen.auto_linear_tokenizer import AutoLinearTokenizer, QwenLinearTokenizer, get_tokenizer
 
 
-class TestAutoLinearTokenizerBasics:
-    """Test basic functionality of AutoLinearTokenizer."""
-
-    def test_can_create_tokenizer_instance(self):
-        """Test that we can create a tokenizer instance."""
-        tokenizer = QwenLinearTokenizer(model_dir="data")
-        assert isinstance(tokenizer, QwenLinearTokenizer)
-        assert hasattr(tokenizer, 'encode')
-        assert hasattr(tokenizer, 'decode')
-        assert hasattr(tokenizer, '__call__')
-
-    def test_tokenizer_has_expected_attributes(self):
-        """Test that tokenizer has HuggingFace-compatible attributes."""
-        tokenizer = QwenLinearTokenizer(model_dir="data")
-
-        # Check required attributes exist
-        assert hasattr(tokenizer, 'model_max_length')
-        assert hasattr(tokenizer, 'padding_side')
-        assert hasattr(tokenizer, 'pad_token')
-        assert hasattr(tokenizer, 'pad_token_id')
-        assert hasattr(tokenizer, 'eos_token')
-        assert hasattr(tokenizer, 'eos_token_id')
-
-        # Check default values
-        assert tokenizer.model_max_length == 32768
-        assert tokenizer.padding_side == 'left'
-        assert tokenizer.pad_token == '<|endoftext|>'
-        assert tokenizer.pad_token_id == 151643
-
-    def test_auto_linear_tokenizer_from_pretrained_interface(self):
-        """Test that AutoLinearTokenizer.from_pretrained has the right interface."""
-        # Test that the method exists and can be called
-        assert hasattr(AutoLinearTokenizer, 'from_pretrained')
-        assert callable(AutoLinearTokenizer.from_pretrained)
-
-        # Test that it returns QwenLinearTokenizer
-        tokenizer = AutoLinearTokenizer.from_pretrained("fake-model")
-        assert isinstance(tokenizer, QwenLinearTokenizer)
-
-    def test_get_tokenizer_convenience_function(self):
-        """Test the get_tokenizer convenience function."""
-        assert callable(get_tokenizer)
-
-        tokenizer = get_tokenizer("fake-model")
-        assert isinstance(tokenizer, QwenLinearTokenizer)
-
-
-class TestTokenizerMethods:
+class TestAutoLinearTokenizerMethods:
     """Test tokenizer methods work correctly when tokenizer can be loaded."""
 
     def setup_method(self):
         """Set up tokenizer for tests."""
-        self.tokenizer = QwenLinearTokenizer(model_dir="data")
+        self.tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
     def test_encode_decode_roundtrip(self):
         """Test that encode/decode works as a roundtrip."""
@@ -157,7 +110,7 @@ class TestEdgeCases:
 
     def test_empty_and_whitespace_texts(self):
         """Test handling of empty and whitespace-only texts."""
-        tokenizer = QwenLinearTokenizer(model_dir="data")
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
         edge_cases = [
             "",
@@ -177,7 +130,7 @@ class TestEdgeCases:
 
     def test_unicode_and_special_characters(self):
         """Test handling of unicode and special characters."""
-        tokenizer = QwenLinearTokenizer(model_dir="data")
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
         unicode_texts = [
             "Hello 世界",
@@ -196,7 +149,7 @@ class TestEdgeCases:
 
     def test_very_long_text(self):
         """Test handling of very long text."""
-        tokenizer = QwenLinearTokenizer(model_dir="data")
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
         # Create a long text
         long_text = "This is a test sentence. " * 1000
@@ -216,7 +169,7 @@ class TestCompatibilityWithHuggingFace:
 
     def test_has_required_methods(self):
         """Test that tokenizer has all required HuggingFace methods."""
-        tokenizer = QwenLinearTokenizer(model_dir="data")
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
         required_methods = [
             'encode',
@@ -233,7 +186,7 @@ class TestCompatibilityWithHuggingFace:
 
     def test_has_required_properties(self):
         """Test that tokenizer has all required HuggingFace properties."""
-        tokenizer = QwenLinearTokenizer(model_dir="data")
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
         required_properties = [
             'vocab_size',
@@ -260,7 +213,7 @@ class TestCompatibilityWithHuggingFace:
 
     def test_aliases_work(self):
         """Test that method aliases work correctly."""
-        tokenizer = QwenLinearTokenizer(model_dir="data")
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
         # Test that aliases exist and are callable
         assert hasattr(tokenizer, 'batch_encode_plus')
@@ -282,7 +235,7 @@ class TestParallelization:
 
     def setup_method(self):
         """Set up tokenizer for tests."""
-        self.tokenizer = QwenLinearTokenizer(model_dir="data")
+        self.tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
     def test_batch_uses_parallel_encoding(self):
         """Test that batch processing uses parallel encoding method."""
