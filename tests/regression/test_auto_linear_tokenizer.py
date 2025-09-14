@@ -167,67 +167,104 @@ class TestEdgeCases:
 class TestCompatibilityWithHuggingFace:
     """Test compatibility with HuggingFace tokenizer interface."""
 
-    def test_has_required_methods(self):
-        """Test that tokenizer has all required HuggingFace methods."""
+    def test_encode_plus_functionality(self):
+        """Test that encode_plus works like HuggingFace tokenizers."""
         tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
-        required_methods = [
-            'encode',
-            'decode',
-            '__call__',
-            'batch_encode_plus',
-            'encode_plus',
-            'save_vocabulary',
-        ]
+        # Test basic encode_plus
+        result = tokenizer.encode_plus("Hello world")
+        assert isinstance(result, dict)
+        assert 'input_ids' in result
+        assert isinstance(result['input_ids'], list)
+        assert len(result['input_ids']) == 1  # Should be wrapped in batch
+        assert isinstance(result['input_ids'][0], list)
 
-        for method_name in required_methods:
-            assert hasattr(tokenizer, method_name), f"Missing method: {method_name}"
-            assert callable(getattr(tokenizer, method_name)), f"Method not callable: {method_name}"
+        # Test with return_attention_mask
+        result_with_mask = tokenizer.encode_plus("Hello world", return_attention_mask=True)
+        assert 'attention_mask' in result_with_mask
+        assert len(result_with_mask['attention_mask']) == 1
 
-    def test_has_required_properties(self):
-        """Test that tokenizer has all required HuggingFace properties."""
+        # Test with padding and max_length
+        result_padded = tokenizer.encode_plus("Hi", padding=True, max_length=10)
+        assert len(result_padded['input_ids'][0]) <= 10
+
+    def test_batch_encode_plus_functionality(self):
+        """Test that batch_encode_plus works like HuggingFace tokenizers."""
         tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
-        required_properties = [
-            'vocab_size',
-            'model_max_length',
-            'padding_side',
-            'pad_token',
-            'pad_token_id',
-            'eos_token',
-            'eos_token_id',
-        ]
+        texts = ["Hello world", "How are you?", "Fine thanks"]
 
-        for prop_name in required_properties:
-            assert hasattr(tokenizer, prop_name), f"Missing property: {prop_name}"
+        # Test basic batch encoding
+        result = tokenizer.batch_encode_plus(texts)
+        assert isinstance(result, dict)
+        assert 'input_ids' in result
+        assert len(result['input_ids']) == len(texts)
 
-        # Test that vocab_size is callable and returns int
-        if hasattr(tokenizer, 'vocab_size'):
-            if callable(tokenizer.vocab_size):
-                vocab_size = tokenizer.vocab_size()
-                assert isinstance(vocab_size, int)
-                assert vocab_size > 0
-            else:
-                assert isinstance(tokenizer.vocab_size, int)
-                assert tokenizer.vocab_size > 0
+        # Test with attention masks
+        result_with_masks = tokenizer.batch_encode_plus(texts, return_attention_mask=True)
+        assert 'attention_mask' in result_with_masks
+        assert len(result_with_masks['attention_mask']) == len(texts)
 
-    def test_aliases_work(self):
-        """Test that method aliases work correctly."""
+        # Test with padding
+        result_padded = tokenizer.batch_encode_plus(texts, padding=True)
+        lengths = [len(seq) for seq in result_padded['input_ids']]
+        assert len(set(lengths)) == 1, "All sequences should be same length when padded"
+
+    def test_vocab_size_functionality(self):
+        """Test that vocab_size returns a valid vocabulary size."""
         tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
-        # Test that aliases exist and are callable
-        assert hasattr(tokenizer, 'batch_encode_plus')
-        assert callable(tokenizer.batch_encode_plus)
+        vocab_size = tokenizer.vocab_size
+        assert isinstance(vocab_size, int)
+        assert vocab_size > 0
+        assert vocab_size > 1000  # Should be a reasonable vocab size
 
-        assert hasattr(tokenizer, 'encode_plus')
-        assert callable(tokenizer.encode_plus)
+    def test_special_tokens_functionality(self):
+        """Test that special tokens work correctly."""
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
 
-        # Test that they actually work
-        result1 = tokenizer.encode_plus("test")
-        assert isinstance(result1, dict)
+        # Test that special token attributes exist and have reasonable values
+        assert tokenizer.pad_token_id is not None
+        assert isinstance(tokenizer.pad_token_id, int)
+        assert tokenizer.pad_token_id >= 0
 
-        result2 = tokenizer.batch_encode_plus(["test1", "test2"])
-        assert isinstance(result2, dict)
+        assert tokenizer.eos_token_id is not None
+        assert isinstance(tokenizer.eos_token_id, int)
+        assert tokenizer.eos_token_id >= 0
+
+        # Test that special tokens can be used in encoding/decoding
+        text = "Hello world"
+        tokens_with_special = tokenizer.encode(text, add_special_tokens=True)
+        tokens_without_special = tokenizer.encode(text, add_special_tokens=False)
+
+        # Should be different when special tokens are added
+        if tokenizer.bos_token_id is not None:
+            assert len(tokens_with_special) >= len(tokens_without_special)
+
+    def test_padding_side_functionality(self):
+        """Test that padding_side setting actually affects padding behavior."""
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
+
+        # Test left padding (default)
+        tokenizer.padding_side = 'left'
+        result_left = tokenizer(["Hi", "Hello world"], padding=True, max_length=10)
+
+        # Test right padding
+        tokenizer.padding_side = 'right'
+        result_right = tokenizer(["Hi", "Hello world"], padding=True, max_length=10)
+
+        # Results should be different due to different padding sides
+        if len(result_left['input_ids'][0]) == len(result_right['input_ids'][0]):
+            # If same length, padding positions should be different
+            assert result_left['input_ids'][0] != result_right['input_ids'][0]
+
+    def test_save_vocabulary_functionality(self):
+        """Test that save_vocabulary can be called without errors."""
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
+
+        # Should not crash when called
+        result = tokenizer.save_vocabulary("/tmp/test_vocab")
+        assert isinstance(result, tuple)  # Should return tuple as per HF interface
 
 
 class TestParallelization:

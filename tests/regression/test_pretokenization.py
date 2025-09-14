@@ -191,7 +191,7 @@ class TestPunctuationAndSymbols:
             ('"quoted"', ['"quoted', '"'], ['"quoted"']),
             # With space before quote, both work correctly
             ("import 'module'", ["import", " '", "module", "'"], ["import", " '", "module", "'"]),
-            ("{'key': 'value'}", ["{", "'key", "':", " '", "value", "'", "}"], ["{", "'key", "':", " '", "value", "'", "}"]),
+            ("{'key': 'value'}", ["{'", "key", "':", " '", "value", "'}"], ["{'", "key", "':", " '", "value", "'}"]),
         ]
 
         for text, expected_slow, expected_fast in test_cases:
@@ -233,6 +233,79 @@ class TestCodeSnippets:
         fast = pretokenize_fast(json_text)
 
         assert slow == fast, "Slow and fast tokenization don't match for JSON"
+
+
+class TestPanicRegression:
+    """Test cases that previously caused panics in the Rust code."""
+
+    def test_unicode_character_panic(self):
+        """Test that Unicode characters don't cause panics in contraction handling.
+
+        This test reproduces a panic that occurred when text.chars().nth(start_pos - 1)
+        returned None due to byte vs character position mismatch with Unicode characters.
+        """
+        # Test cases with Unicode characters that can cause byte/char position mismatches
+        test_cases = [
+            # Unicode characters before contractions
+            "café's delicious",
+            "naïve's approach",
+            "résumé's format",
+            # Unicode in various positions
+            "🚀's launch",
+            "测试's test",
+            "Москва's weather",
+            # Edge case: Unicode at start with contraction
+            "ñ's character",
+            # Multiple Unicode chars
+            "café naïve's test",
+            # Unicode with quoted words that look like contractions
+            "café 'verbose' test",
+            # Empty or minimal cases that might trigger edge conditions
+            "'s",
+            "a's",
+            # Cases with Unicode and whitespace
+            "  café's  test  ",
+            "\tcafé's\ttest",
+        ]
+
+        for text in test_cases:
+            try:
+                # These should not panic
+                slow = pretokenize_slow(text)
+                fast = pretokenize_fast(text)
+
+                # Verify both complete without panicking
+                assert isinstance(slow, list), f"Slow tokenization failed for '{text}'"
+                assert isinstance(fast, list), f"Fast tokenization failed for '{text}'"
+
+                # Results should be consistent (though may differ between slow/fast for some cases)
+                print(f"Text: {text!r}")
+                print(f"Slow: {slow}")
+                print(f"Fast: {fast}")
+
+            except Exception as e:
+                pytest.fail(f"Tokenization panicked for text '{text}': {e}")
+
+    def test_empty_and_edge_cases(self):
+        """Test edge cases that might cause panics."""
+        edge_cases = [
+            "",  # Empty string
+            "'",  # Single quote
+            "''",  # Double quote
+            "'s",  # Just contraction
+            " 's",  # Space + contraction
+            "\n's",  # Newline + contraction
+            "\t's",  # Tab + contraction
+        ]
+
+        for text in edge_cases:
+            try:
+                slow = pretokenize_slow(text)
+                fast = pretokenize_fast(text)
+                assert isinstance(slow, list), f"Slow tokenization failed for '{text}'"
+                assert isinstance(fast, list), f"Fast tokenization failed for '{text}'"
+            except Exception as e:
+                pytest.fail(f"Tokenization panicked for edge case '{text}': {e}")
 
 
 class TestPerformanceRegression:

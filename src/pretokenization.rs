@@ -84,8 +84,12 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
                     // If there's nothing before the apostrophe, or it's whitespace/punctuation,
                     // this is a quoted word, not a contraction
                     if start_pos == 0 || (start_pos > 0 && {
-                        let prev_char = text.chars().nth(start_pos - 1).unwrap();
-                        !prev_char.is_alphanumeric()
+                        // Convert byte position to character position safely
+                        let text_up_to_pos = &text[..start_pos];
+                        match text_up_to_pos.chars().last() {
+                            Some(prev_char) => !prev_char.is_alphanumeric(),
+                            None => true, // If we can't get the previous character, treat as non-alphanumeric
+                        }
                     }) {
                         // Check if we just added a whitespace token that should have the quote attached
                         if !result.is_empty() {
