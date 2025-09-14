@@ -277,6 +277,112 @@ class TestCompatibilityWithHuggingFace:
         assert isinstance(result2, dict)
 
 
+class TestParallelization:
+    """Test parallelization functionality."""
+
+    def setup_method(self):
+        """Set up tokenizer for tests."""
+        self.tokenizer = QwenLinearTokenizer(model_dir="data")
+
+    def test_batch_uses_parallel_encoding(self):
+        """Test that batch processing uses parallel encoding method."""
+        texts = ["First text for parallel test", "Second text for parallel test", "Third text for parallel test"]
+
+        # This should internally call encode_batch_parallel, not individual encode calls
+        result = self.tokenizer(texts)
+
+        # Verify we get the expected batch structure
+        assert isinstance(result, dict)
+        assert 'input_ids' in result
+        assert len(result['input_ids']) == len(texts)
+
+        # Each result should be a list of token IDs
+        for token_list in result['input_ids']:
+            assert isinstance(token_list, list)
+            assert len(token_list) > 0
+            assert all(isinstance(token, int) for token in token_list)
+
+    def test_single_text_vs_batch_consistency(self):
+        """Test that single text and batch processing give consistent results."""
+        test_text = "This is a test for consistency between single and batch processing"
+
+        # Process as single text
+        single_result = self.tokenizer(test_text)
+        single_tokens = single_result['input_ids'][0]
+
+        # Process as batch with one item
+        batch_result = self.tokenizer([test_text])
+        batch_tokens = batch_result['input_ids'][0]
+
+        # Results should be identical
+        assert single_tokens == batch_tokens
+
+    def test_empty_batch_handling(self):
+        """Test handling of empty batch."""
+        result = self.tokenizer([])
+
+        assert isinstance(result, dict)
+        assert 'input_ids' in result
+        assert result['input_ids'] == []
+
+    def test_large_batch_processing(self):
+        """Test processing of larger batches to verify parallel efficiency."""
+        # Create a larger batch to test parallel processing
+        texts = [f"This is test sentence number {i} for parallel processing." for i in range(20)]
+
+        result = self.tokenizer(texts)
+
+        # Verify all texts were processed
+        assert len(result['input_ids']) == len(texts)
+
+        # Verify each result is valid
+        for i, token_list in enumerate(result['input_ids']):
+            assert isinstance(token_list, list)
+            assert len(token_list) > 0, f"Empty tokens for text {i}"
+            assert all(isinstance(token, int) for token in token_list)
+
+    def test_batch_with_attention_mask(self):
+        """Test batch processing with attention masks."""
+        texts = ["Short text", "This is a much longer text for testing", "Medium length text"]
+
+        result = self.tokenizer(texts, return_attention_mask=True, padding=True)
+
+        # Should have both input_ids and attention_mask
+        assert 'input_ids' in result
+        assert 'attention_mask' in result
+        assert len(result['input_ids']) == len(texts)
+        assert len(result['attention_mask']) == len(texts)
+
+        # All sequences should be same length due to padding
+        max_len = max(len(seq) for seq in result['input_ids'])
+        for seq in result['input_ids']:
+            assert len(seq) == max_len
+        for mask in result['attention_mask']:
+            assert len(mask) == max_len
+            assert all(m in [0, 1] for m in mask)
+
+    def test_mixed_length_batch(self):
+        """Test batch processing with texts of very different lengths."""
+        texts = [
+            "Short",
+            "This is a medium length text with several words in it",
+            "A",
+            "This is an extremely long text that goes on and on with many words and should test the parallel processing capabilities of the tokenizer when dealing with texts of vastly different lengths and complexities"
+        ]
+
+        result = self.tokenizer(texts)
+
+        # Verify all texts processed correctly
+        assert len(result['input_ids']) == len(texts)
+
+        # Verify lengths are different (no unexpected padding)
+        lengths = [len(tokens) for tokens in result['input_ids']]
+        assert len(set(lengths)) > 1, "Expected different token lengths for different text lengths"
+
+        # Shortest should be much shorter than longest
+        assert min(lengths) < max(lengths)
+
+
 if __name__ == "__main__":
     # Run with pytest or directly
     pytest.main([__file__, "-v"])

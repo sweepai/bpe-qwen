@@ -22,6 +22,9 @@ python -m pytest tests/regression/test_auto_linear_tokenizer.py::TestAutoLinearT
 # Run specific test method
 python -m pytest tests/regression/test_auto_linear_tokenizer.py::TestAutoLinearTokenizerBasics::test_can_create_tokenizer_instance -v
 
+# Run parallelization tests
+python -m pytest tests/regression/test_auto_linear_tokenizer.py::TestParallelization -v
+
 # Run all tests
 python -m pytest tests/ -v
 ```
