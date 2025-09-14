@@ -2,62 +2,82 @@ use regex::Regex;
 
 /// Pretokenization that returns byte indices instead of string slices
 /// This avoids string allocations and makes the second pass more efficient
-pub fn pretokenize_fast_indices(text: &str) -> Vec<(usize, usize)> {
-    // Compile the regex pattern without lookahead
+/// Returns only end positions since start of next token = end of previous token
+pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
+    // Use the same pattern as pretokenization.rs without lookahead
     let pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
     let re = Regex::new(pattern).expect("Failed to compile regex");
 
-    // Find all matches and collect their byte positions
-    let matches: Vec<(usize, usize)> = re
-        .find_iter(text)
-        .map(|m| (m.start(), m.end()))
-        .collect();
+    // First pass: collect all regex matches
+    let matches: Vec<_> = re.find_iter(text).collect();
 
     if matches.is_empty() {
-        return matches;
+        return Vec::new();
     }
 
-    // Second pass: fix incorrectly split contractions and adjust whitespace
+    // Second pass: fix incorrectly split contractions and apply whitespace correction
     let mut result = Vec::with_capacity(matches.len());
-    let text_bytes = text.as_bytes();
     let mut i = 0;
 
     while i < matches.len() {
-        let (start, end) = matches[i];
-        let mat_slice = &text[start..end];
+        let mat = matches[i];
+        let mat_str = mat.as_str();
 
-        // Check if this is a contraction pattern that might have incorrectly split a word
-        if mat_slice.to_lowercase() == "'s" || mat_slice.to_lowercase() == "'t" ||
-           mat_slice.to_lowercase() == "'re" || mat_slice.to_lowercase() == "'ve" ||
-           mat_slice.to_lowercase() == "'m" || mat_slice.to_lowercase() == "'ll" ||
-           mat_slice.to_lowercase() == "'d" {
+        // Check if this match starts with a double quote and we have a closing quote next
+        if mat_str.starts_with('"') && mat_str.len() > 1 && i + 1 < matches.len() {
+            let next = matches[i + 1].as_str();
+            if next == "\"" {
+                // Merge the quoted string with the closing quote
+                result.push(matches[i + 1].end());
+                i += 2;
+                continue;
+            }
+        }
+
+        // Check if this match is a contraction pattern that might have incorrectly split a word
+        if (mat_str == "'s" || mat_str == "'t" || mat_str == "'re" || mat_str == "'ve" ||
+            mat_str == "'m" || mat_str == "'ll" || mat_str == "'d" ||
+            mat_str == "'S" || mat_str == "'T" || mat_str == "'RE" || mat_str == "'VE" ||
+            mat_str == "'M" || mat_str == "'LL" || mat_str == "'D") {
+
             // Check if the next token starts with letters (indicating it was incorrectly split)
             if i + 1 < matches.len() {
-                let (next_start, next_end) = matches[i + 1];
-                let next_slice = &text[next_start..next_end];
+                let next = matches[i + 1].as_str();
 
                 // If next token starts with a letter, this was likely an incorrect split
-                if !next_slice.is_empty() && next_slice.chars().next().unwrap().is_alphabetic() {
-                    // Check if there's something before the apostrophe
-                    if start > 0 {
-                        // Look at the previous character
-                        let prev_char_end = start;
-                        let mut prev_char_start = start.saturating_sub(1);
-                        while prev_char_start > 0 && !text.is_char_boundary(prev_char_start) {
-                            prev_char_start -= 1;
-                        }
-                        let prev_char = &text[prev_char_start..prev_char_end];
+                if !next.is_empty() && next.chars().next().unwrap().is_alphabetic() {
+                    // Check what came before this token to determine if it's a real contraction
+                    // or an incorrectly split word like 'verbose'
+                    let start_pos = matches[i].start();
 
-                        // If previous character is not alphanumeric, this is a quoted word, not a contraction
-                        if !prev_char.chars().next().map_or(false, |c| c.is_alphanumeric()) {
-                            // Merge the incorrectly split tokens
-                            result.push((start, next_end));
-                            i += 2;
-                            continue;
+                    // If there's nothing before the apostrophe, or it's whitespace/punctuation,
+                    // this is a quoted word, not a contraction
+                    if start_pos == 0 || (start_pos > 0 && {
+                        // Convert byte position to character position safely
+                        let text_up_to_pos = &text[..start_pos];
+                        match text_up_to_pos.chars().last() {
+                            Some(prev_char) => !prev_char.is_alphanumeric(),
+                            None => true, // If we can't get the previous character, treat as non-alphanumeric
                         }
-                    } else {
-                        // If apostrophe is at the start, it's definitely not a contraction
-                        result.push((start, next_end));
+                    }) {
+                        // Check if we just added a whitespace token that should have the quote attached
+                        if !result.is_empty() {
+                            let last_end = if result.len() == 1 { 0 } else { result[result.len() - 2] };
+                            let last_token = &text[last_end..result[result.len() - 1]];
+                            if last_token == " " {
+                                // Pop the single space and replace with space + quote
+                                result.pop();
+                                let space_quote_end = start_pos + "'".len();
+                                result.push(space_quote_end);
+                                // Add the full word (contraction pattern + letters)
+                                result.push(matches[i + 1].end());
+                                i += 2;
+                                continue;
+                            }
+                        }
+
+                        // Otherwise just merge the incorrectly split tokens
+                        result.push(matches[i + 1].end());
                         i += 2;
                         continue;
                     }
@@ -66,114 +86,191 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<(usize, usize)> {
         }
 
         // Check if this match is only whitespace (but not containing \r or \n)
-        if mat_slice.chars().all(|c| c.is_whitespace())
-            && !mat_slice.contains('\r')
-            && !mat_slice.contains('\n') {
-
+        // \r and \n are handled specially by the regex and should not be split
+        if mat_str.chars().all(|c| c.is_whitespace())
+            && !mat_str.contains('\r')
+            && !mat_str.contains('\n') {
             // Check what follows this match
             if i + 1 < matches.len() {
-                let (next_start, next_end) = matches[i + 1];
-                let next_slice = &text[next_start..next_end];
+                let next = matches[i + 1].as_str();
 
-                if !next_slice.is_empty() {
-                    let first_char = next_slice.chars().next().unwrap();
+                // The lookahead \s+(?!\S) means "whitespace NOT followed by non-whitespace"
+                // So when whitespace IS followed by non-whitespace, we need to handle it specially
+                if !next.is_empty() {
+                    let first_char = next.chars().next().unwrap();
 
-                    // Handle different cases based on what follows
                     if first_char.is_alphabetic() {
-                        // Merge last space with alphabetic token
-                        let space_chars: Vec<char> = mat_slice.chars().collect();
+                        // For alphabetic chars, merge the last space with the next token
+                        let space_chars: Vec<char> = mat_str.chars().collect();
 
                         if space_chars.len() > 1 {
-                            // Split: keep all but last space
-                            let split_pos = start + mat_slice.len() - mat_slice.chars().last().unwrap().len_utf8();
-                            result.push((start, split_pos));
-                            result.push((split_pos, next_end));
-                            i += 2;
+                            // Keep all but last space as separate token
+                            let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                            result.push(split_pos);
+                            // Merge last space with next token
+                            result.push(matches[i + 1].end());
+                            i += 2; // Skip next token since we merged it
                             continue;
                         } else {
-                            // Single space - merge with next
-                            result.push((start, next_end));
-                            i += 2;
+                            // Single space - merge with next token
+                            result.push(matches[i + 1].end());
+                            i += 2; // Skip next token since we merged it
                             continue;
                         }
                     } else if first_char.is_numeric() {
-                        // For numbers, split whitespace but keep separate
-                        let space_chars: Vec<char> = mat_slice.chars().collect();
+                        // For numbers, split whitespace but keep them separate
+                        let space_chars: Vec<char> = mat_str.chars().collect();
 
                         if space_chars.len() > 1 {
-                            let split_pos = start + mat_slice.len() - mat_slice.chars().last().unwrap().len_utf8();
-                            result.push((start, split_pos));
-                            result.push((split_pos, end));
-                            i += 1;
+                            // Split into n-1 spaces and 1 space (like slow version)
+                            let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                            result.push(split_pos);
+                            result.push(mat.end());
+                            i += 1; // Continue to process next token normally
                             continue;
                         }
                     } else if !first_char.is_whitespace() {
-                        // Handle punctuation
-                        if next_slice.starts_with('\'') && next_slice.len() > 1 {
-                            // Check for actual contractions (must be exactly a contraction, not a quoted word)
-                            let next_lower = next_slice.to_lowercase();
-                            let is_contraction = next_lower == "'s" || next_lower == "'t" ||
-                                                 next_lower == "'re" || next_lower == "'ve" ||
-                                                 next_lower == "'m" || next_lower == "'ll" ||
-                                                 next_lower == "'d";
+                        // For punctuation/other non-whitespace, non-alphabetic, non-numeric
+                        // The pattern ` ?[^\s\p{L}\p{N}]+` matches space + punctuation
+                        // But we need to be careful not to create tokens that would be split by contractions
 
-                            if is_contraction {
-                                // Don't merge with contractions
-                                let space_chars: Vec<char> = mat_slice.chars().collect();
+                        // Check if next token starts with a single quote and could be a contraction
+                        if next.starts_with('\'') && next.len() > 1 {
+                            // Check if this could match a contraction pattern
+                            let next_lower = next.to_lowercase();
+                            if next_lower.starts_with("'s") || next_lower.starts_with("'t") ||
+                               next_lower.starts_with("'re") || next_lower.starts_with("'ve") ||
+                               next_lower.starts_with("'m") || next_lower.starts_with("'ll") ||
+                               next_lower.starts_with("'d") {
+                                // This is likely a contraction, don't merge space with it
+                                // Just split the whitespace normally
+                                let space_chars: Vec<char> = mat_str.chars().collect();
                                 if space_chars.len() > 1 {
-                                    let split_pos = start + mat_slice.len() - mat_slice.chars().last().unwrap().len_utf8();
-                                    result.push((start, split_pos));
-                                    result.push((split_pos, end));
+                                    let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                                    result.push(split_pos);
+                                    result.push(mat.end());
                                     i += 1;
                                     continue;
                                 }
                             } else {
-                                // This is a quoted word, not a contraction
-                                // Don't merge spaces with quoted words - keep them separate
-                                let space_chars: Vec<char> = mat_slice.chars().collect();
-                                if space_chars.len() > 1 {
-                                    let split_pos = start + mat_slice.len() - mat_slice.chars().last().unwrap().len_utf8();
-                                    result.push((start, split_pos));
-                                    result.push((split_pos, end));
-                                } else {
-                                    result.push((start, end));
+                                // Check if it's punctuation followed by letters that could form 've', 're', etc.
+                                let has_letters = next.chars().skip(1).any(|c| c.is_alphabetic());
+
+                                if has_letters {
+                                    // This could be like 'verbose' - check if it would match contractions
+                                    let letter_part: String = next.chars().skip(1).collect();
+                                    if letter_part.to_lowercase().starts_with("ve") ||
+                                       letter_part.to_lowercase().starts_with("re") ||
+                                       letter_part.to_lowercase().starts_with("ll") ||
+                                       letter_part.to_lowercase().starts_with("s") ||
+                                       letter_part.to_lowercase().starts_with("t") ||
+                                       letter_part.to_lowercase().starts_with("m") ||
+                                       letter_part.to_lowercase().starts_with("d") {
+                                        // Would match a contraction pattern - keep them separate
+                                        let space_chars: Vec<char> = mat_str.chars().collect();
+                                        if space_chars.len() > 1 {
+                                            let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                                            result.push(split_pos);
+                                            // Merge space with just the punctuation, not the letters
+                                            let punct_end = matches[i + 1].start() + "'".len();
+                                            result.push(punct_end);
+                                            // Add the letters separately
+                                            result.push(matches[i + 1].end());
+                                            i += 2;
+                                            continue;
+                                        } else {
+                                            // Single space - merge with punctuation only
+                                            let punct_end = matches[i + 1].start() + "'".len();
+                                            result.push(punct_end);
+                                            result.push(matches[i + 1].end());
+                                            i += 2;
+                                            continue;
+                                        }
+                                    }
                                 }
-                                i += 1;
-                                continue;
                             }
                         }
 
-                        // Default punctuation handling (non-quote punctuation)
-                        let space_chars: Vec<char> = mat_slice.chars().collect();
-                        if space_chars.len() > 1 {
-                            let split_pos = start + mat_slice.len() - mat_slice.chars().last().unwrap().len_utf8();
-                            result.push((start, split_pos));
-                            result.push((split_pos, next_end));
-                            i += 2;
-                            continue;
-                        } else {
-                            result.push((start, next_end));
-                            i += 2;
-                            continue;
+                        // For other punctuation cases
+                        let next_chars: Vec<char> = next.chars().collect();
+                        let has_letters = next_chars.iter().skip(1).any(|c| c.is_alphabetic());
+
+                        if !first_char.is_alphabetic() && has_letters {
+                            // Punctuation followed by letters (but not contractions)
+                            let space_chars: Vec<char> = mat_str.chars().collect();
+
+                            if space_chars.len() > 1 {
+                                let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                                result.push(split_pos);
+
+                                // Split punctuation from letters
+                                let letter_start = next_chars.iter().position(|c| c.is_alphabetic()).unwrap_or(next_chars.len());
+                                if letter_start > 0 && letter_start < next_chars.len() {
+                                    let punct_end = matches[i + 1].start() + next_chars[..letter_start].iter().map(|c| c.len_utf8()).sum::<usize>();
+                                    result.push(punct_end);
+                                    result.push(matches[i + 1].end());
+                                } else {
+                                    result.push(matches[i + 1].end());
+                                }
+                                i += 2;
+                                continue;
+                            } else {
+                                // Single space
+                                let letter_start = next_chars.iter().position(|c| c.is_alphabetic()).unwrap_or(next_chars.len());
+                                if letter_start > 0 && letter_start < next_chars.len() {
+                                    let punct_end = matches[i + 1].start() + next_chars[..letter_start].iter().map(|c| c.len_utf8()).sum::<usize>();
+                                    result.push(punct_end);
+                                    result.push(matches[i + 1].end());
+                                } else {
+                                    result.push(matches[i + 1].end());
+                                }
+                                i += 2;
+                                continue;
+                            }
+                        } else if !next.starts_with(' ') {
+                            // Pure punctuation without letters
+                            let space_chars: Vec<char> = mat_str.chars().collect();
+
+                            if space_chars.len() > 1 {
+                                let split_pos = mat.start() + mat_str.len() - mat_str.chars().last().unwrap().len_utf8();
+                                result.push(split_pos);
+                                result.push(matches[i + 1].end());
+                                i += 2;
+                                continue;
+                            } else {
+                                result.push(matches[i + 1].end());
+                                i += 2;
+                                continue;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Default: keep the match as-is
-        result.push((start, end));
+        // Default case: keep the match as-is
+        result.push(mat.end());
         i += 1;
     }
 
     result
 }
 
-/// Convert indices to actual string slices for testing
-pub fn indices_to_strings(text: &str, indices: &[(usize, usize)]) -> Vec<String> {
-    indices.iter()
-        .map(|&(start, end)| text[start..end].to_string())
-        .collect()
+/// Convert end indices to actual string slices for testing
+pub fn indices_to_strings(text: &str, end_indices: &[usize]) -> Vec<String> {
+    if end_indices.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::with_capacity(end_indices.len());
+    let mut start = 0;
+
+    for &end in end_indices {
+        result.push(text[start..end].to_string());
+        start = end;
+    }
+
+    result
 }
 
 #[cfg(test)]
