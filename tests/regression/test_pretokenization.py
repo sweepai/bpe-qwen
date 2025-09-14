@@ -308,6 +308,156 @@ class TestPanicRegression:
                 pytest.fail(f"Tokenization panicked for edge case '{text}': {e}")
 
 
+class TestTokenizationMismatchEdgeCases:
+    """Test cases for specific tokenization mismatches found in real data."""
+
+    def test_java_annotations(self):
+        """Test Java annotation patterns that cause tokenization mismatches."""
+        test_cases = [
+            # Java annotations should stay together
+            "@JsonProperty\n\tprivate",
+            "@Override\n\tpublic",
+            "@Component\n\tclass",
+            "@Autowired\n\tprivate",
+            # Annotations with parameters
+            "@JsonProperty(\"name\")\n\tprivate",
+            "@RequestMapping(\"/api\")\n\tpublic",
+        ]
+
+        for text in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            # Both should produce the same result
+            assert slow == fast, f"Tokenization mismatch for '{text}': slow={slow}, fast={fast}"
+
+            # Verify annotation stays together (not split into @ + annotation)
+            tokens_str = ''.join(slow)
+            assert tokens_str == text, f"Tokens don't reconstruct original text for '{text}'"
+
+    def test_import_statements(self):
+        """Test import statement patterns that cause tokenization mismatches."""
+        test_cases = [
+            # Import statements with quoted strings - these SHOULD match but DON'T
+            '"context"\n\t"encoding/json"',
+            '"fmt"\n\t"strings"',
+            '"encoding/json"\n\t"fmt"',
+        ]
+
+        for text in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            # This should pass but FAILS - demonstrating the bug
+            assert slow == fast, f"BUG: Tokenization mismatch for '{text}': slow={slow}, fast={fast}"
+
+    def test_method_calls_and_chaining(self):
+        """Test method call patterns that cause tokenization mismatches."""
+        test_cases = [
+            # Method calls that SHOULD match but DON'T
+            ".stream()\n\t\t\t\t.filter",
+            ".reverse();\n\n\thead",
+            ".file\t\t=",
+        ]
+
+        for text in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            # This should pass but FAILS - demonstrating the bug
+            assert slow == fast, f"BUG: Tokenization mismatch for '{text}': slow={slow}, fast={fast}"
+
+    def test_pointer_and_variable_patterns(self):
+        """Test C/C++ pointer and variable patterns that cause mismatches."""
+        test_cases = [
+            # Pointer patterns
+            "*xrc_domain",
+            "*ptr_variable",
+            "**double_pointer",
+            # Variable with underscores
+            "var_name_with_underscores",
+            "CONSTANT_VALUE_NAME",
+            # Mixed patterns
+            "*variable_ptr->field",
+            "&reference_var",
+        ]
+
+        for text in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == fast, f"Tokenization mismatch for '{text}': slow={slow}, fast={fast}"
+
+            # Verify tokens reconstruct original
+            tokens_str = ''.join(slow)
+            assert tokens_str == text, f"Tokens don't reconstruct original text for '{text}'"
+
+    def test_file_extensions_and_paths(self):
+        """Test file extension and path patterns that cause mismatches."""
+        test_cases = [
+            # File extensions
+            ".java",
+            ".go",
+            ".ts",
+            ".cpp",
+            ".h",
+            # File paths
+            "src/main/java/com/example/Class.java",
+            "pkg/github/pullrequests.go",
+            "include/ibvcore.h",
+            # Relative paths
+            "../../../parent/file.txt",
+            "./current/directory/file.js",
+        ]
+
+        for text in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == fast, f"Tokenization mismatch for '{text}': slow={slow}, fast={fast}"
+
+            # Verify tokens reconstruct original
+            tokens_str = ''.join(slow)
+            assert tokens_str == text, f"Tokens don't reconstruct original text for '{text}'"
+
+    def test_complex_code_patterns(self):
+        """Test complex code patterns that combine multiple edge cases."""
+        test_cases = [
+            # Java class with annotations - SHOULD match but DON'T
+            '@JsonProperty\n\tprivate String name;\n\t@Override\n\tpublic String toString() {',
+            # Go import block
+            'import (\n\t"context"\n\t"encoding/json"\n\t"fmt"\n)',
+            # C pointer operations
+            '*xrc_domain->field = value;\n**ptr_ptr = &variable;',
+            # Method chaining with file operations
+            '.stream()\n\t\t.filter(file -> file.endsWith(".java"))\n\t\t.collect()',
+        ]
+
+        for text in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            # This should pass but FAILS - demonstrating the bug
+            assert slow == fast, f"BUG: Tokenization mismatch for complex pattern:\nText: {text!r}\nSlow: {slow}\nFast: {fast}"
+
+    def test_tokenization_mismatch_summary(self):
+        """Summary test that documents the key tokenization differences causing mismatches."""
+        edge_cases = [
+            # These patterns SHOULD tokenize the same but DON'T
+            '\t@Override',
+            '\t"context"',
+            '\t.filter',
+            '\thead',
+        ]
+
+        for text in edge_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            # This should pass but FAILS - demonstrating the bug
+            assert slow == fast, f"BUG: Tokenization mismatch for '{text}': slow={slow}, fast={fast}"
+
+
 class TestPerformanceRegression:
     """Ensure fixes don't regress performance too much."""
 
