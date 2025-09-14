@@ -562,7 +562,8 @@ impl QwenTokenizer {
         // Use the fast pretokenization with the globally precompiled regex
         let pretokens = crate::pretokenization::pretokenize_fast(text);
 
-        // Now encode the pretokens
+        // Pass 1: Collect all dedup tokens from BPE encoding
+        let mut all_dedup_tokens = Vec::new();
         for piece in pretokens {
             if piece.is_empty() {
                 continue;
@@ -571,14 +572,16 @@ impl QwenTokenizer {
             let piece_bytes = piece.as_bytes();
             // Use the fast BPE encoding from rust-gems
             let dedup_tokens = self.bpe.encode_via_backtracking(piece_bytes);
-            // Map deduplicated indices back to original token IDs
-            for dedup_token in dedup_tokens {
-                if (dedup_token as usize) < self.reverse_token_id_vec.len() {
-                    let orig_id = self.reverse_token_id_vec[dedup_token as usize];
-                    all_tokens.push(orig_id);
-                } else {
-                    all_tokens.push(dedup_token);  // Fallback to the dedup token if no mapping
-                }
+            all_dedup_tokens.extend(dedup_tokens);
+        }
+
+        // Pass 2: Batch convert dedup tokens to original IDs
+        for dedup_token in all_dedup_tokens {
+            if (dedup_token as usize) < self.reverse_token_id_vec.len() {
+                let orig_id = self.reverse_token_id_vec[dedup_token as usize];
+                all_tokens.push(orig_id);
+            } else {
+                all_tokens.push(dedup_token);  // Fallback to the dedup token if no mapping
             }
         }
 
