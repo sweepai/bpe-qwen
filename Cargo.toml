@@ -18,6 +18,7 @@ unicode-normalization = "0.1"
 base64 = "0.22"
 rayon = "1.10"
 fnv = "1.0"
+ctor = "0.2"
 
 # Use the local bpe crate from vendor
 bpe = { path = "vendor/rust-gems/crates/bpe", features = ["tiktoken", "rand"] }

@@ -1,7 +1,8 @@
 /// Pre-tokenization module with fast and slow implementations for testing
 use regex::Regex;
 use fancy_regex::Regex as FancyRegex;
-use lazy_static::lazy_static;
+use std::sync::OnceLock;
+use ctor::ctor;
 
 /// The Qwen pre-tokenization pattern with lookahead
 pub const QWEN_PATTERN_WITH_LOOKAHEAD: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
@@ -9,19 +10,27 @@ pub const QWEN_PATTERN_WITH_LOOKAHEAD: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\
 /// The Qwen pre-tokenization pattern without lookahead
 pub const QWEN_PATTERN_WITHOUT_LOOKAHEAD: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
 
-lazy_static! {
-    /// Globally precompiled regex for maximum performance
-    static ref GLOBAL_QWEN_REGEX: Regex = Regex::new(QWEN_PATTERN_WITHOUT_LOOKAHEAD)
-        .expect("Failed to compile global Qwen regex");
+/// Globally precompiled regex for maximum performance
+static GLOBAL_QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
 
-    /// Globally precompiled fancy regex for the slow implementation
-    static ref GLOBAL_QWEN_FANCY_REGEX: FancyRegex = FancyRegex::new(QWEN_PATTERN_WITH_LOOKAHEAD)
-        .expect("Failed to compile global Qwen fancy regex");
+/// Globally precompiled fancy regex for the slow implementation
+static GLOBAL_QWEN_FANCY_REGEX: OnceLock<FancyRegex> = OnceLock::new();
+
+/// Initialize the global regexes automatically on module load
+#[ctor]
+fn initialize_regexes() {
+    // Initialize the OnceLock globals
+    GLOBAL_QWEN_REGEX.set(Regex::new(QWEN_PATTERN_WITHOUT_LOOKAHEAD)
+        .expect("Failed to compile global Qwen regex")).ok();
+    GLOBAL_QWEN_FANCY_REGEX.set(FancyRegex::new(QWEN_PATTERN_WITH_LOOKAHEAD)
+        .expect("Failed to compile global Qwen fancy regex")).ok();
 }
 
 /// Slow but correct implementation using fancy-regex with lookahead
 pub fn pretokenize_slow(text: &str) -> Vec<String> {
-    GLOBAL_QWEN_FANCY_REGEX.find_iter(text)
+    GLOBAL_QWEN_FANCY_REGEX.get()
+        .expect("Global regex not initialized")
+        .find_iter(text)
         .filter_map(|m| m.ok())
         .map(|m| m.as_str().to_string())
         .collect()
@@ -29,7 +38,8 @@ pub fn pretokenize_slow(text: &str) -> Vec<String> {
 
 /// Fast implementation using standard regex with correction pass
 pub fn pretokenize_fast(text: &str) -> Vec<String> {
-    pretokenize_fast_with_regex(text, &GLOBAL_QWEN_REGEX)
+    pretokenize_fast_with_regex(text, GLOBAL_QWEN_REGEX.get()
+        .expect("Global regex not initialized"))
 }
 
 /// Fast implementation using a pre-compiled regex (for performance)
