@@ -429,11 +429,11 @@ impl QwenTokenizer {
                         }
                     }
                 }
-                println!("Loaded {} special tokens from tokenizer_config.json", special_tokens.len());
-                // Debug: Print all loaded special tokens
-                for (token_text, token_id) in &special_tokens {
-                    println!("  Special token: '{}' -> ID {}", token_text, token_id);
-                }
+                // println!("Loaded {} special tokens from tokenizer_config.json", special_tokens.len());
+                // // Debug: Print all loaded special tokens
+                // for (token_text, token_id) in &special_tokens {
+                //     println!("  Special token: '{}' -> ID {}", token_text, token_id);
+                // }
             }
         } else {
             // Fallback: try to find common special tokens in vocab
@@ -453,11 +453,11 @@ impl QwenTokenizer {
                 }
             }
 
-            println!("Loaded {} special tokens from vocab fallback", special_tokens.len());
-            // Debug: Print all loaded special tokens
-            for (token_text, token_id) in &special_tokens {
-                println!("  Special token: '{}' -> ID {}", token_text, token_id);
-            }
+            // println!("Loaded {} special tokens from vocab fallback", special_tokens.len());
+            // // Debug: Print all loaded special tokens
+            // for (token_text, token_id) in &special_tokens {
+            //     println!("  Special token: '{}' -> ID {}", token_text, token_id);
+            // }
         }
 
         // Pre-tokenization will use the globally precompiled regex
