@@ -15,7 +15,7 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
 
     while i < matches.len() {
         let mat = matches[i];
-        let start = mat.start();
+        let _start = mat.start();
         let end = mat.end();
         let mat_str = mat.as_str();
 
@@ -31,10 +31,10 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
         }
 
         // Check if this match is a contraction pattern that might have incorrectly split a word
-        if (mat_str == "'s" || mat_str == "'t" || mat_str == "'re" || mat_str == "'ve" ||
+        if mat_str == "'s" || mat_str == "'t" || mat_str == "'re" || mat_str == "'ve" ||
             mat_str == "'m" || mat_str == "'ll" || mat_str == "'d" ||
             mat_str == "'S" || mat_str == "'T" || mat_str == "'RE" || mat_str == "'VE" ||
-            mat_str == "'M" || mat_str == "'LL" || mat_str == "'D") {
+            mat_str == "'M" || mat_str == "'LL" || mat_str == "'D" {
 
             // Check if the next token starts with letters (indicating it was incorrectly split)
             if i + 1 < matches.len() {
@@ -255,35 +255,7 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
     result
 }
 
-/// Check if all bytes represent whitespace characters (fast ASCII check)
-fn is_all_whitespace_bytes(bytes: &[u8]) -> bool {
-    bytes.iter().all(|&b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-}
 
-/// Check if bytes contain newlines
-fn contains_newlines(bytes: &[u8]) -> bool {
-    bytes.iter().any(|&b| matches!(b, b'\n' | b'\r'))
-}
-
-/// Check if first byte indicates alphabetic start (ASCII only for speed)
-fn is_alphabetic_start(byte: u8) -> bool {
-    byte.is_ascii_alphabetic()
-}
-
-/// Check if first byte indicates numeric start
-fn is_numeric_start(byte: u8) -> bool {
-    byte.is_ascii_digit()
-}
-
-/// Check if bytes contain any ASCII digits
-fn has_digits_bytes(bytes: &[u8]) -> bool {
-    bytes.iter().any(|&b| b.is_ascii_digit())
-}
-
-/// Check if all bytes are ASCII digits
-fn is_all_digits(bytes: &[u8]) -> bool {
-    !bytes.is_empty() && bytes.iter().all(|&b| b.is_ascii_digit())
-}
 
 /// Convert end indices to actual string slices for testing
 pub fn indices_to_strings(text: &str, end_indices: &[usize]) -> Vec<String> {

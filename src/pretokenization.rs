@@ -66,10 +66,10 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
         }
 
         // Check if this match is a contraction pattern that might have incorrectly split a word
-        if (mat == "'s" || mat == "'t" || mat == "'re" || mat == "'ve" ||
+        if mat == "'s" || mat == "'t" || mat == "'re" || mat == "'ve" ||
             mat == "'m" || mat == "'ll" || mat == "'d" ||
             mat == "'S" || mat == "'T" || mat == "'RE" || mat == "'VE" ||
-            mat == "'M" || mat == "'LL" || mat == "'D") {
+            mat == "'M" || mat == "'LL" || mat == "'D" {
 
             // Check if the next token starts with letters (indicating it was incorrectly split)
             if i + 1 < matches.len() {
@@ -295,13 +295,7 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
     result
 }
 
-/// Test helper to compare outputs of fast and slow implementations
-pub fn compare_pretokenization(text: &str) -> (Vec<String>, Vec<String>, bool) {
-    let slow_result = pretokenize_slow(text);
-    let fast_result = pretokenize_fast(text);
-    let matches = slow_result == fast_result;
-    (slow_result, fast_result, matches)
-}
+
 
 #[cfg(test)]
 mod tests {

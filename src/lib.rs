@@ -1,8 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use serde::Deserialize;
 use std::collections::HashMap;
-use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 use serde_json::Value;
 use std::path::Path;
@@ -11,11 +9,8 @@ use bpe::byte_pair_encoding::BytePairEncoding;
 
 mod pretokenization;
 mod pretokenization_indices;
-mod pretokenization_automata;
 use std::cell::RefCell;
 use std::borrow::Cow;
-use rayon::prelude::*;
-use std::sync::Arc;
 
 /// Memory pool for reusing Vec<u32> allocations
 struct VectorPool {
@@ -45,15 +40,7 @@ impl VectorPool {
         Vec::with_capacity(min_capacity.max(128))
     }
     
-    fn return_buffer(&self, buf: Vec<u32>) {
-        let mut available = self.available.borrow_mut();
-        
-        // Only keep buffers with reasonable capacity and limit pool size
-        if buf.capacity() >= 32 && buf.capacity() <= 8192 && available.len() < 10 {
-            available.push(buf);
-        }
-        // Otherwise let the buffer be dropped
-    }
+
 }
 
 /// Fast ASCII detection using true SIMD intrinsics
@@ -159,57 +146,7 @@ fn is_ascii_fast(text: &str) -> bool {
     true
 }
 
-/// Represents a HuggingFace tokenizer configuration
-#[derive(Debug, Deserialize)]
-struct HFTokenizerConfig {
-    model: HFModel,
-    pre_tokenizer: Option<HFPreTokenizer>,
-    normalizer: Option<HFNormalizer>,
-    added_tokens: Option<Vec<AddedToken>>,
-}
 
-#[derive(Debug, Deserialize)]
-struct HFModel {
-    #[serde(rename = "type")]
-    _model_type: String,
-    vocab: HashMap<String, u32>,
-    merges: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct HFPreTokenizer {
-    #[serde(rename = "type")]
-    _tokenizer_type: String,
-    pretokenizers: Option<Vec<PreTokenizer>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PreTokenizer {
-    #[serde(rename = "type")]
-    _tokenizer_type: String,
-    pattern: Option<PatternConfig>,
-    #[allow(dead_code)]
-    behavior: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PatternConfig {
-    #[serde(rename = "Regex")]
-    regex: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct HFNormalizer {
-    #[serde(rename = "type")]
-    normalizer_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AddedToken {
-    id: u32,
-    content: String,
-    special: bool,
-}
 
 /// Helper function for parallel encoding without vector pool using indices
 fn encode_text_parallel(
@@ -501,7 +438,7 @@ impl QwenTokenizer {
         } else {
             Cow::Borrowed(text)  // Zero-copy when no normalization
         };
-        let norm_time = norm_start.elapsed();
+        let _norm_time = norm_start.elapsed();
 
         // Handle special tokens - find all occurrences and their positions
         let special_start = std::time::Instant::now();
@@ -517,7 +454,7 @@ impl QwenTokenizer {
         
         // Sort by position
         special_token_positions.sort_by_key(|&(pos, _, _)| pos);
-        let special_time = special_start.elapsed();
+        let _special_time = special_start.elapsed();
         
         // If we have special tokens, split and encode
         let encode_start = std::time::Instant::now();
@@ -550,8 +487,8 @@ impl QwenTokenizer {
         } else {
             self.encode_regular(&normalized)?
         };
-        let encode_time = encode_start.elapsed();
-        let total_time = total_start.elapsed();
+        let _encode_time = encode_start.elapsed();
+        let _total_time = total_start.elapsed();
         
         // Profiling disabled for accurate benchmarks
         
@@ -873,12 +810,6 @@ fn indices_to_strings(text: &str, end_indices: Vec<usize>) -> PyResult<Vec<Strin
     Ok(pretokenization_indices::indices_to_strings(text, &end_indices))
 }
 
-/// Expose the automata-based pretokenization (single pass, no regex)
-#[pyfunction]
-fn pretokenize_automata(text: &str) -> PyResult<Vec<String>> {
-    Ok(pretokenization_automata::pretokenize_automata(text))
-}
-
 /// Python module definition
 #[pymodule]
 fn bpe_qwen(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -887,6 +818,5 @@ fn bpe_qwen(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pretokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(pretokenize_fast_indices, m)?)?;
     m.add_function(wrap_pyfunction!(indices_to_strings, m)?)?;
-    m.add_function(wrap_pyfunction!(pretokenize_automata, m)?)?;
     Ok(())
 }
