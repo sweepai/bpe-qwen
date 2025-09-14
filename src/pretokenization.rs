@@ -1,6 +1,7 @@
 /// Pre-tokenization module with fast and slow implementations for testing
 use regex::Regex;
 use fancy_regex::Regex as FancyRegex;
+use lazy_static::lazy_static;
 
 /// The Qwen pre-tokenization pattern with lookahead
 pub const QWEN_PATTERN_WITH_LOOKAHEAD: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
@@ -8,12 +9,19 @@ pub const QWEN_PATTERN_WITH_LOOKAHEAD: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\
 /// The Qwen pre-tokenization pattern without lookahead
 pub const QWEN_PATTERN_WITHOUT_LOOKAHEAD: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
 
+lazy_static! {
+    /// Globally precompiled regex for maximum performance
+    static ref GLOBAL_QWEN_REGEX: Regex = Regex::new(QWEN_PATTERN_WITHOUT_LOOKAHEAD)
+        .expect("Failed to compile global Qwen regex");
+
+    /// Globally precompiled fancy regex for the slow implementation
+    static ref GLOBAL_QWEN_FANCY_REGEX: FancyRegex = FancyRegex::new(QWEN_PATTERN_WITH_LOOKAHEAD)
+        .expect("Failed to compile global Qwen fancy regex");
+}
+
 /// Slow but correct implementation using fancy-regex with lookahead
 pub fn pretokenize_slow(text: &str) -> Vec<String> {
-    let regex = FancyRegex::new(QWEN_PATTERN_WITH_LOOKAHEAD)
-        .expect("Failed to compile fancy regex");
-
-    regex.find_iter(text)
+    GLOBAL_QWEN_FANCY_REGEX.find_iter(text)
         .filter_map(|m| m.ok())
         .map(|m| m.as_str().to_string())
         .collect()
@@ -21,9 +29,7 @@ pub fn pretokenize_slow(text: &str) -> Vec<String> {
 
 /// Fast implementation using standard regex with correction pass
 pub fn pretokenize_fast(text: &str) -> Vec<String> {
-    let regex = Regex::new(QWEN_PATTERN_WITHOUT_LOOKAHEAD)
-        .expect("Failed to compile standard regex");
-    pretokenize_fast_with_regex(text, &regex)
+    pretokenize_fast_with_regex(text, &GLOBAL_QWEN_REGEX)
 }
 
 /// Fast implementation using a pre-compiled regex (for performance)
@@ -37,6 +43,17 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
 
     while i < matches.len() {
         let mat = matches[i].as_str();
+
+        // Check if this match starts with a double quote and we have a closing quote next
+        if mat.starts_with('"') && mat.len() > 1 && i + 1 < matches.len() {
+            let next = matches[i + 1].as_str();
+            if next == "\"" {
+                // Merge the quoted string with the closing quote
+                result.push(format!("{}{}", mat, next));
+                i += 2;
+                continue;
+            }
+        }
 
         // Check if this match is a contraction pattern that might have incorrectly split a word
         if (mat == "'s" || mat == "'t" || mat == "'re" || mat == "'ve" ||
