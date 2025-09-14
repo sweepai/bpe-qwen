@@ -215,7 +215,6 @@ struct AddedToken {
 fn encode_text_parallel(
     text: &str,
     bpe: &BytePairEncoding,
-    pre_tokenizer_regex: &Option<Regex>,
     normalizer_type: &Option<String>,
     special_tokens: &HashMap<String, u32>,
     reverse_token_id_vec: &Vec<u32>,
@@ -227,72 +226,42 @@ fn encode_text_parallel(
     
     // Create a fresh buffer for this thread
     let mut all_tokens = Vec::with_capacity(128);
-    
-    // Apply regex if present
-    if let Some(regex) = pre_tokenizer_regex {
-        // Use the tested pretokenization logic with pre-compiled regex
-        let pretokens = crate::pretokenization::pretokenize_fast_with_regex(text, regex);
 
-        for piece in pretokens {
-            if piece.is_empty() {
-                continue;
-            }
+    // Use the globally precompiled regex for pretokenization
+    let pretokens = crate::pretokenization::pretokenize_fast(text);
 
-            // Check for special tokens first
-            if let Some(&token_id) = special_tokens.get(&piece) {
-                all_tokens.push(token_id);
-                continue;
-            }
-            
-            // Normalization: NFC normalize only when needed (non-ASCII with NFC normalizer)
-            let normalized = if let Some(ref nt) = normalizer_type {
-                if nt == "NFC" && !is_ascii_fast(&piece) {
-                    // Use Cow to avoid allocation when possible
-                    Cow::from(piece.nfc().collect::<String>())
-                } else {
-                    Cow::from(piece)
-                }
+    for piece in pretokens {
+        if piece.is_empty() {
+            continue;
+        }
+
+        // Check for special tokens first
+        if let Some(&token_id) = special_tokens.get(&piece) {
+            all_tokens.push(token_id);
+            continue;
+        }
+
+        // Normalization: NFC normalize only when needed (non-ASCII with NFC normalizer)
+        let normalized = if let Some(ref nt) = normalizer_type {
+            if nt == "NFC" && !is_ascii_fast(&piece) {
+                // Use Cow to avoid allocation when possible
+                Cow::from(piece.nfc().collect::<String>())
             } else {
                 Cow::from(piece)
-            };
-            
-            // BPE tokenization
-            let dedup_tokens = bpe.encode_via_backtracking(normalized.as_bytes());
-            
-            // Map from deduplicated indices to original token IDs
-            for dedup_id in dedup_tokens {
-                let original_id = *reverse_token_id_vec
-                    .get(dedup_id as usize)
-                    .ok_or_else(|| format!("Invalid dedup ID: {}", dedup_id))?;
-                all_tokens.push(original_id);
             }
-        }
-    } else {
-        // No regex - tokenize the whole text
-        if let Some(&token_id) = special_tokens.get(text) {
-            all_tokens.push(token_id);
         } else {
-            // Normalization
-            let normalized = if let Some(ref nt) = normalizer_type {
-                if nt == "NFC" && !is_ascii_fast(text) {
-                    Cow::from(text.nfc().collect::<String>())
-                } else {
-                    Cow::from(text)
-                }
-            } else {
-                Cow::from(text)
-            };
-            
-            // BPE tokenization
-            let dedup_tokens = bpe.encode_via_backtracking(normalized.as_bytes());
-            
-            // Map from deduplicated indices to original token IDs
-            for dedup_id in dedup_tokens {
-                let original_id = *reverse_token_id_vec
-                    .get(dedup_id as usize)
-                    .ok_or_else(|| format!("Invalid dedup ID: {}", dedup_id))?;
-                all_tokens.push(original_id);
-            }
+            Cow::from(piece)
+        };
+
+        // BPE tokenization
+        let dedup_tokens = bpe.encode_via_backtracking(normalized.as_bytes());
+
+        // Map from deduplicated indices to original token IDs
+        for dedup_id in dedup_tokens {
+            let original_id = *reverse_token_id_vec
+                .get(dedup_id as usize)
+                .ok_or_else(|| format!("Invalid dedup ID: {}", dedup_id))?;
+            all_tokens.push(original_id);
         }
     }
     
@@ -303,7 +272,6 @@ fn encode_text_parallel(
 #[pyclass]
 struct QwenTokenizer {
     bpe: BytePairEncoding,
-    pre_tokenizer_regex: Option<Regex>,
     normalizer_type: Option<String>,
     special_tokens: HashMap<String, u32>,
     special_token_ids: HashMap<u32, String>,
@@ -318,10 +286,8 @@ impl QwenTokenizer {
     /// 
     /// Args:
     ///     dir_path: Directory containing vocab.json, merges.txt, and optionally tokenizer_config.json
-    ///     pretokenize_regex: Optional custom pretokenization regex (defaults to Qwen regex if None)
     #[new]
-    #[pyo3(signature = (dir_path, pretokenize_regex=None))]
-    fn new(dir_path: &str, pretokenize_regex: Option<&str>) -> PyResult<Self> {
+    fn new(dir_path: &str) -> PyResult<Self> {
         let dir = Path::new(dir_path);
         
         // Build paths for required files
@@ -488,31 +454,10 @@ impl QwenTokenizer {
             }
         }
 
-        // Use the Qwen pre-tokenization regex pattern, or custom if provided
-        let pre_tokenizer_regex = if let Some(custom_pattern) = pretokenize_regex {
-            match Regex::new(custom_pattern) {
-                Ok(regex) => Some(regex),
-                Err(e) => {
-                    println!("Warning: Failed to compile custom pre-tokenization regex: {}", e);
-                    None
-                }
-            }
-        } else {
-            // Default Qwen pre-tokenization pattern (without lookahead for speed)
-            // We'll handle the lookahead behavior in a second pass
-            let default_pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
-            match Regex::new(default_pattern) {
-                Ok(regex) => Some(regex),
-                Err(e) => {
-                    println!("Warning: Failed to compile default pre-tokenization regex: {}", e);
-                    None
-                }
-            }
-        };
+        // Pre-tokenization will use the globally precompiled regex
 
         Ok(QwenTokenizer {
             bpe,
-            pre_tokenizer_regex,
             normalizer_type: Some("NFC".to_string()),
             special_tokens,
             special_token_ids,
@@ -611,57 +556,33 @@ impl QwenTokenizer {
 
     /// Internal method to encode regular text
     fn encode_regular(&self, text: &str) -> PyResult<Vec<u32>> {
-        if let Some(ref regex) = self.pre_tokenizer_regex {
-            // Apply pre-tokenization using the tested logic from pretokenization module
-            let mut all_tokens = self.vector_pool.get_buffer(128);  // Get from pool
+        // Apply pre-tokenization using the globally precompiled regex
+        let mut all_tokens = self.vector_pool.get_buffer(128);  // Get from pool
 
-            // Use the corrected pretokenization logic that passes all tests (with pre-compiled regex)
-            let pretokens = crate::pretokenization::pretokenize_fast_with_regex(text, regex);
+        // Use the fast pretokenization with the globally precompiled regex
+        let pretokens = crate::pretokenization::pretokenize_fast(text);
 
-            // Now encode the pretokens
-            for piece in pretokens {
-                if piece.is_empty() {
-                    continue;
-                }
-                // Convert to bytes for BPE encoding
-                let piece_bytes = piece.as_bytes();
-                // Use the fast BPE encoding from rust-gems
-                let dedup_tokens = self.bpe.encode_via_backtracking(piece_bytes);
-                // Map deduplicated indices back to original token IDs
-                for dedup_token in dedup_tokens {
-                    if (dedup_token as usize) < self.reverse_token_id_vec.len() {
-                        let orig_id = self.reverse_token_id_vec[dedup_token as usize];
-                        all_tokens.push(orig_id);
-                    } else {
-                        all_tokens.push(dedup_token);  // Fallback to the dedup token if no mapping
-                    }
-                }
+        // Now encode the pretokens
+        for piece in pretokens {
+            if piece.is_empty() {
+                continue;
             }
-            
-            Ok(all_tokens)
-        } else {
-            // No pre-tokenization, encode the full text
-            let bpe_start = std::time::Instant::now();
-            let dedup_tokens = self.bpe.encode_via_backtracking(text.as_bytes());
-            let bpe_time = bpe_start.elapsed();
-            
+            // Convert to bytes for BPE encoding
+            let piece_bytes = piece.as_bytes();
+            // Use the fast BPE encoding from rust-gems
+            let dedup_tokens = self.bpe.encode_via_backtracking(piece_bytes);
             // Map deduplicated indices back to original token IDs
-            let map_start = std::time::Instant::now();
-            let mut tokens = self.vector_pool.get_buffer(128);  // Get from pool
             for dedup_token in dedup_tokens {
                 if (dedup_token as usize) < self.reverse_token_id_vec.len() {
                     let orig_id = self.reverse_token_id_vec[dedup_token as usize];
-                    tokens.push(orig_id);
+                    all_tokens.push(orig_id);
                 } else {
-                    tokens.push(dedup_token);  // Fallback to the dedup token if no mapping
+                    all_tokens.push(dedup_token);  // Fallback to the dedup token if no mapping
                 }
             }
-            let map_time = map_start.elapsed();
-            
-            // Profiling disabled for accurate benchmarks
-            
-            Ok(tokens)
         }
+
+        Ok(all_tokens)
     }
     
     /// Thread-safe encode for parallel processing (doesn't use vector pool)
@@ -739,7 +660,6 @@ impl QwenTokenizer {
         
         // Share read-only data across threads using Arc
         let bpe = Arc::new(&self.bpe);
-        let pre_tokenizer_regex = Arc::new(&self.pre_tokenizer_regex);
         let normalizer_type = Arc::new(&self.normalizer_type);
         let special_tokens = Arc::new(&self.special_tokens);
         let reverse_token_id_vec = Arc::new(&self.reverse_token_id_vec);
@@ -758,7 +678,6 @@ impl QwenTokenizer {
                         encode_text_parallel(
                             text,
                             &**bpe,
-                            &**pre_tokenizer_regex,
                             &**normalizer_type,
                             &**special_tokens,
                             &**reverse_token_id_vec,
@@ -776,7 +695,6 @@ impl QwenTokenizer {
                     encode_text_parallel(
                         text,
                         &**bpe,
-                        &**pre_tokenizer_regex,
                         &**normalizer_type,
                         &**special_tokens,
                         &**reverse_token_id_vec,
@@ -852,21 +770,15 @@ impl QwenTokenizer {
             text.to_string()
         };
 
-        // Use the fast count method from BPE
+        // Use the fast count method from BPE with global regex pretokenization
         let mut count = 0;
+        let pretokens = crate::pretokenization::pretokenize_fast(&normalized);
 
-        if let Some(ref regex) = self.pre_tokenizer_regex {
-            // Use the tested pretokenization logic with pre-compiled regex
-            let pretokens = crate::pretokenization::pretokenize_fast_with_regex(&normalized, regex);
-
-            for piece in pretokens {
-                if !piece.is_empty() {
-                    let piece_bytes = piece.as_bytes();
-                    count += self.bpe.count(piece_bytes);
-                }
+        for piece in pretokens {
+            if !piece.is_empty() {
+                let piece_bytes = piece.as_bytes();
+                count += self.bpe.count(piece_bytes);
             }
-        } else {
-            count = self.bpe.count(normalized.as_bytes());
         }
         
         Ok(count)
