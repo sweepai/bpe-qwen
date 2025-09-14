@@ -31,14 +31,57 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
     // First pass: collect all regex matches
     let matches: Vec<_> = regex.find_iter(text).collect();
 
-    // Second pass: apply whitespace correction to mimic lookahead behavior
-    // The pattern \s+(?!\S) means "whitespace not followed by non-whitespace"
-    // When whitespace is followed by non-whitespace, the last space attaches to the next token
+    // Second pass: fix incorrectly split contractions and apply whitespace correction
     let mut result = Vec::with_capacity(matches.len());
     let mut i = 0;
 
     while i < matches.len() {
         let mat = matches[i].as_str();
+
+        // Check if this match is a contraction pattern that might have incorrectly split a word
+        if (mat == "'s" || mat == "'t" || mat == "'re" || mat == "'ve" ||
+            mat == "'m" || mat == "'ll" || mat == "'d" ||
+            mat == "'S" || mat == "'T" || mat == "'RE" || mat == "'VE" ||
+            mat == "'M" || mat == "'LL" || mat == "'D") {
+
+            // Check if the next token starts with letters (indicating it was incorrectly split)
+            if i + 1 < matches.len() {
+                let next = matches[i + 1].as_str();
+
+                // If next token starts with a letter, this was likely an incorrect split
+                if !next.is_empty() && next.chars().next().unwrap().is_alphabetic() {
+                    // Check what came before this token to determine if it's a real contraction
+                    // or an incorrectly split word like 'verbose'
+                    let start_pos = matches[i].start();
+
+                    // If there's nothing before the apostrophe, or it's whitespace/punctuation,
+                    // this is a quoted word, not a contraction
+                    if start_pos == 0 || (start_pos > 0 && {
+                        let prev_char = text.chars().nth(start_pos - 1).unwrap();
+                        !prev_char.is_alphanumeric()
+                    }) {
+                        // Check if we just added a whitespace token that should have the quote attached
+                        if !result.is_empty() {
+                            let last_token = result.last().unwrap();
+                            if last_token == " " {
+                                // Pop the single space and replace with space + quote
+                                result.pop();
+                                result.push(" '".to_string());
+                                // Add the full word (contraction pattern + letters)
+                                result.push(format!("{}{}", mat.chars().skip(1).collect::<String>(), next));
+                                i += 2;
+                                continue;
+                            }
+                        }
+
+                        // Otherwise just merge the incorrectly split tokens
+                        result.push(format!("{}{}", mat, next));
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+        }
 
         // Check if this match is only whitespace (but not containing \r or \n)
         // \r and \n are handled specially by the regex and should not be split

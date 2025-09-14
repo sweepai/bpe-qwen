@@ -17,7 +17,7 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<(usize, usize)> {
         return matches;
     }
 
-    // Second pass: adjust boundaries for whitespace handling
+    // Second pass: fix incorrectly split contractions and adjust whitespace
     let mut result = Vec::with_capacity(matches.len());
     let text_bytes = text.as_bytes();
     let mut i = 0;
@@ -25,6 +25,45 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<(usize, usize)> {
     while i < matches.len() {
         let (start, end) = matches[i];
         let mat_slice = &text[start..end];
+
+        // Check if this is a contraction pattern that might have incorrectly split a word
+        if mat_slice.to_lowercase() == "'s" || mat_slice.to_lowercase() == "'t" ||
+           mat_slice.to_lowercase() == "'re" || mat_slice.to_lowercase() == "'ve" ||
+           mat_slice.to_lowercase() == "'m" || mat_slice.to_lowercase() == "'ll" ||
+           mat_slice.to_lowercase() == "'d" {
+            // Check if the next token starts with letters (indicating it was incorrectly split)
+            if i + 1 < matches.len() {
+                let (next_start, next_end) = matches[i + 1];
+                let next_slice = &text[next_start..next_end];
+
+                // If next token starts with a letter, this was likely an incorrect split
+                if !next_slice.is_empty() && next_slice.chars().next().unwrap().is_alphabetic() {
+                    // Check if there's something before the apostrophe
+                    if start > 0 {
+                        // Look at the previous character
+                        let prev_char_end = start;
+                        let mut prev_char_start = start.saturating_sub(1);
+                        while prev_char_start > 0 && !text.is_char_boundary(prev_char_start) {
+                            prev_char_start -= 1;
+                        }
+                        let prev_char = &text[prev_char_start..prev_char_end];
+
+                        // If previous character is not alphanumeric, this is a quoted word, not a contraction
+                        if !prev_char.chars().next().map_or(false, |c| c.is_alphanumeric()) {
+                            // Merge the incorrectly split tokens
+                            result.push((start, next_end));
+                            i += 2;
+                            continue;
+                        }
+                    } else {
+                        // If apostrophe is at the start, it's definitely not a contraction
+                        result.push((start, next_end));
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+        }
 
         // Check if this match is only whitespace (but not containing \r or \n)
         if mat_slice.chars().all(|c| c.is_whitespace())
@@ -71,12 +110,14 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<(usize, usize)> {
                     } else if !first_char.is_whitespace() {
                         // Handle punctuation
                         if next_slice.starts_with('\'') && next_slice.len() > 1 {
-                            // Check for contractions
+                            // Check for actual contractions (must be exactly a contraction, not a quoted word)
                             let next_lower = next_slice.to_lowercase();
-                            if next_lower.starts_with("'s") || next_lower.starts_with("'t") ||
-                               next_lower.starts_with("'re") || next_lower.starts_with("'ve") ||
-                               next_lower.starts_with("'m") || next_lower.starts_with("'ll") ||
-                               next_lower.starts_with("'d") {
+                            let is_contraction = next_lower == "'s" || next_lower == "'t" ||
+                                                 next_lower == "'re" || next_lower == "'ve" ||
+                                                 next_lower == "'m" || next_lower == "'ll" ||
+                                                 next_lower == "'d";
+
+                            if is_contraction {
                                 // Don't merge with contractions
                                 let space_chars: Vec<char> = mat_slice.chars().collect();
                                 if space_chars.len() > 1 {
@@ -87,60 +128,22 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<(usize, usize)> {
                                     continue;
                                 }
                             } else {
-                                // Check if it would form a problematic pattern
-                                let has_letters = next_slice.chars().skip(1).any(|c| c.is_alphabetic());
-                                if has_letters {
-                                    let letter_part: String = next_slice.chars().skip(1).collect();
-                                    if letter_part.to_lowercase().starts_with("ve") ||
-                                       letter_part.to_lowercase().starts_with("re") ||
-                                       letter_part.to_lowercase().starts_with("ll") ||
-                                       letter_part.to_lowercase().starts_with("s") ||
-                                       letter_part.to_lowercase().starts_with("t") ||
-                                       letter_part.to_lowercase().starts_with("m") ||
-                                       letter_part.to_lowercase().starts_with("d") {
-                                        // Would match contraction - handle specially
-                                        let space_chars: Vec<char> = mat_slice.chars().collect();
-                                        if space_chars.len() > 1 {
-                                            let split_pos = start + mat_slice.len() - mat_slice.chars().last().unwrap().len_utf8();
-                                            result.push((start, split_pos));
-                                            // Find where letters start in next token
-                                            let mut letter_start_offset = 0;
-                                            for ch in next_slice.chars() {
-                                                if ch.is_alphabetic() {
-                                                    break;
-                                                }
-                                                letter_start_offset += ch.len_utf8();
-                                            }
-                                            if letter_start_offset > 0 {
-                                                result.push((split_pos, next_start + letter_start_offset));
-                                                result.push((next_start + letter_start_offset, next_end));
-                                            } else {
-                                                result.push((split_pos, next_end));
-                                            }
-                                        } else {
-                                            // Single space
-                                            let mut letter_start_offset = 0;
-                                            for ch in next_slice.chars() {
-                                                if ch.is_alphabetic() {
-                                                    break;
-                                                }
-                                                letter_start_offset += ch.len_utf8();
-                                            }
-                                            if letter_start_offset > 0 {
-                                                result.push((start, next_start + letter_start_offset));
-                                                result.push((next_start + letter_start_offset, next_end));
-                                            } else {
-                                                result.push((start, next_end));
-                                            }
-                                        }
-                                        i += 2;
-                                        continue;
-                                    }
+                                // This is a quoted word, not a contraction
+                                // Don't merge spaces with quoted words - keep them separate
+                                let space_chars: Vec<char> = mat_slice.chars().collect();
+                                if space_chars.len() > 1 {
+                                    let split_pos = start + mat_slice.len() - mat_slice.chars().last().unwrap().len_utf8();
+                                    result.push((start, split_pos));
+                                    result.push((split_pos, end));
+                                } else {
+                                    result.push((start, end));
                                 }
+                                i += 1;
+                                continue;
                             }
                         }
 
-                        // Default punctuation handling
+                        // Default punctuation handling (non-quote punctuation)
                         let space_chars: Vec<char> = mat_slice.chars().collect();
                         if space_chars.len() > 1 {
                             let split_pos = start + mat_slice.len() - mat_slice.chars().last().unwrap().len_utf8();
