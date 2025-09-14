@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""
+Regression tests for pretokenization edge cases.
+
+These tests ensure that various edge cases in pretokenization are handled correctly,
+particularly around contractions, quoted words, and whitespace distribution.
+"""
+
+import sys
+import os
+import pytest
+
+# Add parent directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from bpe_qwen.bpe_qwen import pretokenize_slow, pretokenize_fast
+
+
+class TestContractionHandling:
+    """Test cases for handling contractions and words that look like contractions."""
+
+    def test_real_contractions(self):
+        """Test that real contractions are tokenized correctly."""
+        test_cases = [
+            ("I've got it", ["I", "'ve", " got", " it"]),
+            ("we're here", ["we", "'re", " here"]),
+            ("they'll come", ["they", "'ll", " come"]),
+            ("it's fine", ["it", "'s", " fine"]),
+            ("I'd go", ["I", "'d", " go"]),
+            ("can't stop", ["can", "'t", " stop"]),
+            ("won't work", ["won", "'t", " work"]),
+        ]
+
+        for text, expected in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected, f"Slow tokenization failed for '{text}': {slow} != {expected}"
+            assert fast == expected, f"Fast tokenization failed for '{text}': {fast} != {expected}"
+            assert slow == fast, f"Slow and fast don't match for '{text}'"
+
+    def test_quoted_words_with_contraction_prefixes(self):
+        """Test quoted words starting with contraction patterns.
+
+        The slow (fancy-regex) version incorrectly splits these when they appear
+        without preceding whitespace. The fast version fixes this issue.
+        """
+        test_cases = [
+            # Without preceding space:
+            # (text, expected_slow, expected_fast)
+            ("'verbose'", ["'ve", "rbose", "'"], ["'verbose", "'"]),
+            ("'test'", ["'t", "est", "'"], ["'test", "'"]),
+
+            # With preceding space, both handle correctly
+            (" 'verbose'", [" '", "verbose", "'"], [" '", "verbose", "'"]),
+            (" 'test'", [" '", "test", "'"], [" '", "test", "'"]),
+        ]
+
+        for text, expected_slow, expected_fast in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected_slow, f"Slow tokenization failed for '{text}': {slow} != {expected_slow}"
+            assert fast == expected_fast, f"Fast tokenization failed for '{text}': {fast} != {expected_fast}"
+
+    def test_verbose_in_context(self):
+        """Test the specific 'verbose' edge case that was failing."""
+        text = "                'verbose': True"
+        expected = ['               ', " '", 'verbose', "':", ' True']
+
+        slow = pretokenize_slow(text)
+        fast = pretokenize_fast(text)
+
+        assert slow == expected, f"Slow tokenization failed: {slow} != {expected}"
+        assert fast == expected, f"Fast tokenization failed: {fast} != {expected}"
+
+    def test_mixed_contractions_and_quotes(self):
+        """Test text with both real contractions and quoted words."""
+        test_cases = [
+            ("you're 'wrong'", ["you", "'re", " '", "wrong", "'"]),
+            ("I've seen 'verbose' code", ["I", "'ve", " seen", " '", "verbose", "'", " code"]),
+            ("it's 'test' time", ["it", "'s", " '", "test", "'", " time"]),
+        ]
+
+        for text, expected in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected, f"Slow tokenization failed for '{text}': {slow} != {expected}"
+            assert fast == expected, f"Fast tokenization failed for '{text}': {fast} != {expected}"
+
+
+class TestWhitespaceDistribution:
+    """Test cases for whitespace handling and distribution."""
+
+    def test_spaces_before_quotes(self):
+        """Test that spaces before quotes are handled correctly."""
+        test_cases = [
+            ("    'test': 123", ['   ', " '", 'test', "':", ' ', '1', '2', '3']),
+            ("  'world'", [' ', " '", 'world', "'"]),
+            (" 'hello'", [" '", 'hello', "'"]),
+            ("                'chunk_size': 1000",
+             ['               ', " '", 'chunk', '_size', "':", ' ', '1', '0', '0', '0']),
+        ]
+
+        for text, expected in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected, f"Slow tokenization failed for '{text}': {slow} != {expected}"
+            assert fast == expected, f"Fast tokenization failed for '{text}': {fast} != {expected}"
+
+    def test_multiple_spaces(self):
+        """Test handling of multiple consecutive spaces."""
+        test_cases = [
+            ("hello   world", ["hello", "  ", " world"]),
+            ("a  b   c    d", ["a", " ", " b", "  ", " c", "   ", " d"]),
+            ("   leading", ["  ", " leading"]),
+            ("trailing   ", ["trailing", "   "]),
+        ]
+
+        for text, expected in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected, f"Slow tokenization failed for '{text}': {slow} != {expected}"
+            assert fast == expected, f"Fast tokenization failed for '{text}': {fast} != {expected}"
+
+    def test_spaces_with_numbers(self):
+        """Test that spaces before numbers are handled differently than before letters."""
+        test_cases = [
+            ("    1234", ['   ', ' ', '1', '2', '3', '4']),
+            ("test  123", ["test", " ", " ", "1", "2", "3"]),
+            ("  42", [" ", " ", "4", "2"]),
+        ]
+
+        for text, expected in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected, f"Slow tokenization failed for '{text}': {slow} != {expected}"
+            assert fast == expected, f"Fast tokenization failed for '{text}': {fast} != {expected}"
+
+    def test_newlines_and_special_whitespace(self):
+        """Test handling of newlines and other special whitespace."""
+        test_cases = [
+            ("line1\nline2", ["line", "1", "\n", "line", "2"]),
+            ("test\n\n\nmore", ["test", "\n\n\n", "more"]),
+            ("line1\rline2", ["line", "1", "\r", "line", "2"]),
+            ("line1\r\nline2", ["line", "1", "\r\n", "line", "2"]),
+            # Tab followed by text starting with 'h' creates '\there' token
+            ("tabs\t\there", ["tabs", "\t", "\there"]),
+        ]
+
+        for text, expected in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected, f"Slow tokenization failed for '{text}': {slow} != {expected}"
+            assert fast == expected, f"Fast tokenization failed for '{text}': {fast} != {expected}"
+
+
+class TestPunctuationAndSymbols:
+    """Test cases for punctuation and symbol handling."""
+
+    def test_punctuation_sequences(self):
+        """Test handling of punctuation sequences."""
+        test_cases = [
+            ("Hello, world!", ["Hello", ",", " world", "!"]),
+            ("Wait!!! Really???", ["Wait", "!!!", " Really", "???"]),
+            ("test... okay", ["test", "...", " okay"]),
+            # Punctuation followed by letter without space creates single token
+            ("(a)", ["(a", ")"]),
+            ("[test]", ["[test", "]"]),
+            ("{code}", ["{code", "}"]),
+        ]
+
+        for text, expected in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected, f"Slow tokenization failed for '{text}': {slow} != {expected}"
+            assert fast == expected, f"Fast tokenization failed for '{text}': {fast} != {expected}"
+
+    def test_mixed_punctuation_and_quotes(self):
+        """Test combinations of punctuation and quotes."""
+        test_cases = [
+            # Without space, slow splits 'test' but fast keeps it together
+            ("'test': value", ["'t", "est", "':", " value"], ["'test", "':", " value"]),
+            # Double quotes - slow splits the closing quote
+            ('"quoted"', ['"quoted', '"'], ['"quoted"']),
+            # With space before quote, both work correctly
+            ("import 'module'", ["import", " '", "module", "'"], ["import", " '", "module", "'"]),
+            ("{'key': 'value'}", ["{", "'key", "':", " '", "value", "'", "}"], ["{", "'key", "':", " '", "value", "'", "}"]),
+        ]
+
+        for text, expected_slow, expected_fast in test_cases:
+            slow = pretokenize_slow(text)
+            fast = pretokenize_fast(text)
+
+            assert slow == expected_slow, f"Slow tokenization failed for '{text}': {slow} != {expected_slow}"
+            assert fast == expected_fast, f"Fast tokenization failed for '{text}': {fast} != {expected_fast}"
+
+
+
+class TestCodeSnippets:
+    """Test pretokenization on code snippets."""
+
+    def test_python_code(self):
+        """Test tokenization of Python code snippets."""
+        code = """def process_data(input_file, output_file, config=None):
+    '''Process data from input file and write to output file.'''
+    default_config = {
+        'chunk_size': 1000,
+        'verbose': True
+    }"""
+
+        slow = pretokenize_slow(code)
+        fast = pretokenize_fast(code)
+
+        # Just verify they match - exact token list would be very long
+        assert slow == fast, "Slow and fast tokenization don't match for Python code"
+
+        # Check that the patterns are in the output (they appear with preceding spaces)
+        tokens_str = ' '.join(slow)
+        assert "' verbose" in tokens_str or "' chunk" in tokens_str, "Quoted words should be in output"
+
+    def test_json_like_data(self):
+        """Test tokenization of JSON-like data structures."""
+        json_text = """{"name": "test", "options": {"verbose": true, "debug": false}}"""
+
+        slow = pretokenize_slow(json_text)
+        fast = pretokenize_fast(json_text)
+
+        assert slow == fast, "Slow and fast tokenization don't match for JSON"
+
+
+class TestPerformanceRegression:
+    """Ensure fixes don't regress performance too much."""
+
+    def test_performance_ratio(self):
+        """Test that fast implementation is actually faster than slow on large text."""
+        import time
+
+        # Create a large text with various patterns
+        large_text = """
+        def process_data(input_file, output_file, config=None):
+            '''Process data from input file and write to output file.'''
+            default_config = {
+                'chunk_size': 1000,
+                'encoding': 'utf-8',
+                'compression': 'gzip',
+                'verbose': True
+            }
+            I've got what you're looking for.
+            Multiple   spaces   here.
+            Special chars: @#$%^&*()
+        """ * 100  # Repeat to make it large
+
+        # Time slow implementation
+        start = time.perf_counter()
+        for _ in range(10):
+            slow_result = pretokenize_slow(large_text)
+        slow_time = time.perf_counter() - start
+
+        # Time fast implementation
+        start = time.perf_counter()
+        for _ in range(10):
+            fast_result = pretokenize_fast(large_text)
+        fast_time = time.perf_counter() - start
+
+        # Verify correctness
+        assert slow_result == fast_result, "Results don't match"
+
+        # Verify performance (fast should be faster)
+        speedup = slow_time / fast_time
+        assert speedup > 1.0, f"Fast implementation is slower than slow! Speedup: {speedup:.2f}x"
+
+        # Log the speedup for information
+        print(f"\nPerformance: Fast is {speedup:.2f}x faster than slow")
+
+
+if __name__ == "__main__":
+    # Run with pytest or directly
+    pytest.main([__file__, "-v"])
