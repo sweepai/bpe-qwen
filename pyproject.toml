@@ -15,6 +15,11 @@ dynamic = ["version"]
 tests = [
     "pytest",
 ]
+dev = [
+    "transformers",
+    "datasets",
+    "huggingface-hub",
+]
 [tool.maturin]
 python-source = "python"
 features = ["pyo3/extension-module"]
