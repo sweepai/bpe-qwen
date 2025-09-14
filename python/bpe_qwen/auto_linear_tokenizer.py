@@ -149,7 +149,7 @@ class QwenLinearTokenizer:
             token_ids = token_ids.tolist()
 
         # Handle nested lists (batch decoding)
-        if isinstance(token_ids[0], list):
+        if token_ids and isinstance(token_ids[0], list):
             token_ids = token_ids[0]
 
         # Filter special tokens if requested
