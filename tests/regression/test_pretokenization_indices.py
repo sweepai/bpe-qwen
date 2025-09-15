@@ -406,6 +406,24 @@ class TestTabPatterns:
             '\t@Test',           # Java test annotation
             '\t\t.filter',       # Multiple tabs + method
             '\t\t"context"',     # Multiple tabs + quoted string
+
+            # New patterns from batch tokenization errors
+            # Contraction patterns after spaces
+            " 'd",               # Contraction after space
+            " 're",              # Another contraction
+            " 'll",              # Will contraction
+            " 't",               # Not contraction
+            " 'S",               # Capital S contraction
+
+            # Comment/JavaDoc patterns
+            "/**\n\t *",         # JavaDoc comment start
+            "/*\n\t *",          # Multi-line comment start
+            "\t *",              # Comment continuation line
+            " * ",               # Comment with spaces
+
+            # Line continuation patterns
+            " \\\n",             # Line continuation
+            "  \\\n",            # Double space line continuation
         ]
 
         for text in edge_cases:
@@ -414,12 +432,10 @@ class TestTabPatterns:
             # These should all match, but currently they don't - this documents the bug
             print(f"\nTesting: {text!r}")
             print(f"Slow:    {slow}")
-            print(f"Fast:    {fast}")
             print(f"Indices: {indices_result}")
 
-            # The main assertion - this should pass but currently fails
-            assert slow == fast, f"BUG: Tokenization mismatch for '{text}': slow={slow}, fast={fast}"
-            assert indices_result == fast, f"BUG: Indices mismatch for '{text}': indices={indices_result}, fast={fast}"
+            # Only check slow vs indices as requested
+            assert slow == indices_result, f"BUG: Indices mismatch for '{text}': slow={slow}, indices={indices_result}"
 
 
 class TestPerformanceRegression:

@@ -36,6 +36,13 @@ python -m pytest tests/ -v
 - Don't skip tests unless the environment genuinely doesn't support them
 - Test real functionality, not mocked behavior when possible
 
+### CRITICAL: Use the Test Suite, Not Custom Scripts
+- **NEVER use `python -c "..."` commands for debugging or testing**
+- **ALWAYS use the existing test suite:** `python -m pytest tests/regression/test_pretokenization_indices.py::TestTabPatterns::test_tokenization_mismatch_edge_cases -v -s`
+- The test suite has proper imports, error handling, and structured output
+- Custom python -c commands are unreliable and unprofessional
+- If you need to debug specific cases, add them to the test suite instead
+
 ## Code Style Preferences
 
 ### Import Style

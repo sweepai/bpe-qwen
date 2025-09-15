@@ -86,6 +86,21 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
             if i + 1 < matches.len() {
                 let next = matches[i + 1].as_str();
 
+                // Special case: For comment patterns like " *", keep space and asterisk together
+                // This must be checked first before other punctuation logic
+                if next == "*" {
+                    let space_chars: Vec<char> = mat_str.chars().collect();
+                    if space_chars.len() > 1 {
+                        // Multiple spaces - split off all but last space, then merge last space with asterisk
+                        let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
+                        result.push(split_pos);
+                    }
+                    // Merge the (last) space with the asterisk
+                    result.push(matches[i + 1].end());
+                    i += 2;
+                    continue;
+                }
+
                 // The lookahead \s+(?!\S) means "whitespace NOT followed by non-whitespace"
                 // So when whitespace IS followed by non-whitespace, we need to handle it specially
                 if !next.is_empty() {
@@ -143,6 +158,22 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
                                 i += 1;
                                 continue;
                             }
+                        }
+
+                        // Special case: For comment patterns like " *", keep space and asterisk together
+                        // This matches patterns like JavaDoc comment continuations
+                        if next.starts_with('*') && next.len() == 1 {
+                            // Current token is whitespace, next token is a single asterisk
+                            let space_chars: Vec<char> = mat_str.chars().collect();
+                            if space_chars.len() > 1 {
+                                // Multiple spaces - split off all but last space, then merge last space with asterisk
+                                let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
+                                result.push(split_pos);
+                            }
+                            // Merge the (last) space with the asterisk
+                            result.push(matches[i + 1].end());
+                            i += 2;
+                            continue;
                         }
 
                         // Check if next token starts with a single quote and could be a contraction
