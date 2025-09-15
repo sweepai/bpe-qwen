@@ -120,7 +120,7 @@ def analyze_tokenization_differences(results, text_name="text", verbose=False):
         return False
 
 
-def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=0, verbose=False, break_on_error=True):
+def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=0, verbose=False):
     """
     Load JSONL file and process each entry with prompt/completion format.
 
@@ -129,7 +129,6 @@ def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=0, 
         compare_tokenization (bool): Whether to compare tokenization methods
         max_entries (int): Maximum number of entries to process (0 for all)
         verbose (bool): Whether to show detailed output for all entries
-        break_on_error (bool): Whether to stop on first tokenization mismatch
     """
     if verbose:
         print(f"Loading JSONL file: {file_path}")
@@ -195,11 +194,7 @@ def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=0, 
                 processed_entries += 1
                 progress_bar.update(1)
 
-                # Break on first error if requested
-                if break_on_error and entry_has_mismatch:
-                    progress_bar.close()
-                    print(f"\n❌ Stopping on first tokenization mismatch (entry {processed_entries})")
-                    return
+                # Continue processing all entries - don't break on mismatches
 
                 # Optional: limit output for large files
                 if max_entries > 0 and processed_entries >= max_entries:
@@ -228,7 +223,6 @@ def main(
     no_tokenization: bool = typer.Option(False, "--no-tokenization", help="Skip tokenization comparison"),
     max_entries: int = typer.Option(0, "--max-entries", help="Maximum number of entries to process (0 for all)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output for all entries"),
-    break_on_error: bool = typer.Option(True, "--break-on-error/--no-break-on-error", help="Stop processing on first tokenization mismatch")
 ):
     """Process SFT JSONL data and compare tokenization methods."""
 
@@ -244,8 +238,7 @@ def main(
         file_path=file_path,
         compare_tokenization=not no_tokenization,
         max_entries=max_entries,
-        verbose=verbose,
-        break_on_error=break_on_error
+        verbose=verbose
     )
 
 
