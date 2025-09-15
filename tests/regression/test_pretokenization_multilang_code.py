@@ -636,6 +636,7 @@ class DataProcessor:
         item["data"] = {"raw": item["data"], "type": "unknown"}
         return item
 
+@staticmethod
 def create_sample_data(count: int = 1000) -> List[Dict[str, Any]]:
     """Create sample data for testing."""
     import random

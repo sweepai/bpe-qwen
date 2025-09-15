@@ -58,10 +58,20 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
         if mat.starts_with('"') && mat.len() > 1 && i + 1 < matches.len() {
             let next = matches[i + 1].as_str();
             if next == "\"" {
-                // Merge the quoted string with the closing quote
-                result.push(format!("{}{}", mat, next));
-                i += 2;
-                continue;
+                // Check if the previous token was a tab - if so, DON'T merge the quotes
+                let should_merge = if i > 0 {
+                    let prev = matches[i - 1].as_str();
+                    !prev.contains('\t')  // Don't merge if previous token contains tabs
+                } else {
+                    true  // Merge if no previous token
+                };
+
+                if should_merge {
+                    // Merge the quoted string with the closing quote
+                    result.push(format!("{}{}", mat, next));
+                    i += 2;
+                    continue;
+                }
             }
         }
 
@@ -128,12 +138,15 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
                 if !next.is_empty() {
                     let first_char = next.chars().next().unwrap();
 
+                    // Check if this whitespace contains tabs - tabs should NOT be merged with punctuation
+                    let contains_tabs = mat.contains('\t');
+
                     if first_char.is_alphabetic() {
-                        // For alphabetic chars, merge the last space with the next token
+                        // For alphabetic chars, merge the last space with the next token (but not tabs)
                         let space_chars: Vec<char> = mat.chars().collect();
 
-                        if space_chars.len() > 1 {
-                            // Keep all but last space as separate token
+                        if space_chars.len() > 1 && !contains_tabs {
+                            // Keep all but last space as separate token (only if no tabs)
                             let first_part: String = space_chars[..space_chars.len() - 1].iter().collect();
                             let last_space: String = space_chars[space_chars.len() - 1].to_string();
 
@@ -142,12 +155,13 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
                             result.push(format!("{}{}", last_space, next));
                             i += 2; // Skip next token since we merged it
                             continue;
-                        } else {
-                            // Single space - merge with next token
+                        } else if space_chars.len() == 1 && !contains_tabs {
+                            // Single space - merge with next token (only if not a tab)
                             result.push(format!("{}{}", mat, next));
                             i += 2; // Skip next token since we merged it
                             continue;
                         }
+                        // If contains tabs, fall through to default case (keep separate)
                     } else if first_char.is_numeric() {
                         // For numbers, split whitespace but keep them separate
                         let space_chars: Vec<char> = mat.chars().collect();
@@ -162,8 +176,9 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
                             i += 1; // Continue to process next token normally
                             continue;
                         }
-                    } else if !first_char.is_whitespace() {
+                    } else if !first_char.is_whitespace() && !contains_tabs {
                         // For punctuation/other non-whitespace, non-alphabetic, non-numeric
+                        // Only merge with spaces, NOT tabs
                         // The pattern ` ?[^\s\p{L}\p{N}]+` matches space + punctuation
                         // But we need to be careful not to create tokens that would be split by contractions
 
@@ -283,6 +298,7 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
                             }
                         }
                     }
+                    // If we reach here with tabs or other conditions, fall through to default behavior
                 }
             }
         }

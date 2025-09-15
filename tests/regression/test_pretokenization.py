@@ -448,6 +448,7 @@ class TestTokenizationMismatchEdgeCases:
             '\t"context"',
             '\t.filter',
             '\thead',
+            '\n\n\t@Test\n',
         ]
 
         for text in edge_cases:

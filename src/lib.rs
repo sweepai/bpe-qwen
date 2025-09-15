@@ -12,6 +12,13 @@ mod pretokenization_indices;
 use std::cell::RefCell;
 use std::borrow::Cow;
 
+/// Macro to standardize pretokenization function calls
+macro_rules! pretokenize {
+    ($text:expr) => {
+        crate::pretokenization_indices::pretokenize_fast_indices($text)
+    };
+}
+
 /// Memory pool for reusing Vec<u32> allocations
 struct VectorPool {
     available: RefCell<Vec<Vec<u32>>>,
@@ -238,7 +245,7 @@ fn encode_regular_parallel(
     let mut all_tokens = Vec::with_capacity(128);
 
     // Use the indices-based pretokenization for better performance
-    let end_indices = crate::pretokenization_indices::pretokenize_fast_indices(text);
+    let end_indices = pretokenize!(text);
 
     let mut start = 0;
     for &end in &end_indices {
@@ -566,7 +573,7 @@ impl QwenTokenizer {
         let mut all_tokens = self.vector_pool.get_buffer(128);  // Get from pool
 
         // Use the indices-based pretokenization for better performance
-        let end_indices = crate::pretokenization_indices::pretokenize_fast_indices(text);
+        let end_indices = pretokenize!(text);
 
         // Pass 1: Collect all dedup tokens from BPE encoding
         let mut all_dedup_tokens = Vec::new();
@@ -785,7 +792,7 @@ impl QwenTokenizer {
 
         // Use the fast count method from BPE with indices-based pretokenization
         let mut count = 0;
-        let end_indices = crate::pretokenization_indices::pretokenize_fast_indices(&normalized);
+        let end_indices = pretokenize!(&normalized);
 
         let mut start = 0;
         for &end in &end_indices {
