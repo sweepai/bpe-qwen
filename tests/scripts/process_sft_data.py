@@ -83,23 +83,19 @@ def show_mismatch_context(list1, list2, name1, name2, context_size=3):
         print(f"{spaces}^ mismatch here")
 
 
-def analyze_tokenization_differences(results, text_name="text"):
+def analyze_tokenization_differences(results, text_name="text", verbose=False):
     """
     Analyze differences between tokenization methods.
 
     Args:
         results (dict): Results from compare_tokenization_methods
         text_name (str): Name/description of the text for output
+        verbose (bool): Whether to show detailed output even on success
     """
     # Fail fast - expect all results to be present
     slow = results['slow']
     fast = results['fast']
     indices = results['indices']
-
-    print(f"\n--- Tokenization Analysis for {text_name} ---")
-    print(f"Slow tokens ({len(slow)}): {slow[:5]}{'...' if len(slow) > 5 else ''}")
-    print(f"Fast tokens ({len(fast)}): {fast[:5]}{'...' if len(fast) > 5 else ''}")
-    print(f"Indices tokens ({len(indices)}): {indices[:5]}{'...' if len(indices) > 5 else ''}")
 
     # Check for mismatches and show context
     mismatches = []
@@ -124,14 +120,23 @@ def analyze_tokenization_differences(results, text_name="text"):
             has_mismatch = True
 
     if mismatches:
+        print(f"\n--- Tokenization Analysis for {text_name} ---")
+        print(f"Slow tokens ({len(slow)}): {slow[:5]}{'...' if len(slow) > 5 else ''}")
+        print(f"Fast tokens ({len(fast)}): {fast[:5]}{'...' if len(fast) > 5 else ''}")
+        print(f"Indices tokens ({len(indices)}): {indices[:5]}{'...' if len(indices) > 5 else ''}")
         print(f"⚠️  TOKENIZATION MISMATCHES: {', '.join(mismatches)}")
         return True
     else:
-        print("✅ All tokenization methods match")
+        if verbose:
+            print(f"\n--- Tokenization Analysis for {text_name} ---")
+            print(f"Slow tokens ({len(slow)}): {slow[:5]}{'...' if len(slow) > 5 else ''}")
+            print(f"Fast tokens ({len(fast)}): {fast[:5]}{'...' if len(fast) > 5 else ''}")
+            print(f"Indices tokens ({len(indices)}): {indices[:5]}{'...' if len(indices) > 5 else ''}")
+            print("✅ All tokenization methods match")
         return False
 
 
-def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=5):
+def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=5, verbose=False):
     """
     Load JSONL file and process each entry with prompt/completion format.
 
@@ -139,8 +144,10 @@ def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=5):
         file_path (str): Path to the JSONL file
         compare_tokenization (bool): Whether to compare tokenization methods
         max_entries (int): Maximum number of entries to process (0 for all)
+        verbose (bool): Whether to show detailed output for all entries
     """
-    print(f"Loading JSONL file: {file_path}")
+    if verbose:
+        print(f"Loading JSONL file: {file_path}")
 
     total_entries = 0
     processed_entries = 0
@@ -162,60 +169,72 @@ def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=5):
             prompt = data['prompt']
             completion = data['completion']
 
-            print(f"\n--- Entry {processed_entries + 1} (Line {line_num}) ---")
-            print(f"Prompt length: {len(prompt)} characters")
-            print(f"Completion length: {len(completion)} characters")
-
-            # Show first 100 characters of prompt and completion
-            print(f"Prompt preview: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
-            print(f"Completion preview: {completion[:100]}{'...' if len(completion) > 100 else ''}")
+            entry_has_mismatch = False
 
             # Compare tokenization methods if requested
             if compare_tokenization:
                 # Tokenize prompt - fail fast on any tokenization errors
                 prompt_results = compare_tokenization_methods(prompt, f"prompt {processed_entries + 1}")
-                prompt_mismatch = analyze_tokenization_differences(prompt_results, f"prompt {processed_entries + 1}")
+                prompt_mismatch = analyze_tokenization_differences(prompt_results, f"prompt {processed_entries + 1}", verbose=verbose)
 
                 # Tokenize completion - fail fast on any tokenization errors
                 completion_results = compare_tokenization_methods(completion, f"completion {processed_entries + 1}")
-                completion_mismatch = analyze_tokenization_differences(completion_results, f"completion {processed_entries + 1}")
+                completion_mismatch = analyze_tokenization_differences(completion_results, f"completion {processed_entries + 1}", verbose=verbose)
 
-                if prompt_mismatch or completion_mismatch:
+                entry_has_mismatch = prompt_mismatch or completion_mismatch
+                if entry_has_mismatch:
                     tokenization_mismatches += 1
+
+            # Only show detailed entry info if there's a mismatch or verbose mode
+            if entry_has_mismatch or verbose:
+                print(f"\n--- Entry {processed_entries + 1} (Line {line_num}) ---")
+                print(f"Prompt length: {len(prompt)} characters")
+                print(f"Completion length: {len(completion)} characters")
+                print(f"Prompt preview: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
+                print(f"Completion preview: {completion[:100]}{'...' if len(completion) > 100 else ''}")
 
             processed_entries += 1
 
             # Optional: limit output for large files
             if max_entries > 0 and processed_entries >= max_entries:
-                print(f"\n... (showing first {max_entries} entries, total: {total_entries})")
+                if verbose:
+                    print(f"\n... (showing first {max_entries} entries, total: {total_entries})")
                 break
 
-    print(f"\nProcessing complete!")
-    print(f"Total entries found: {total_entries}")
-    print(f"Successfully processed: {processed_entries}")
-
+    # Always show final summary
     if compare_tokenization:
-        print(f"Tokenization mismatches found: {tokenization_mismatches}/{processed_entries} entries")
+        if tokenization_mismatches == 0:
+            print(f"✅ All {processed_entries} entries passed tokenization validation")
+        else:
+            print(f"\nProcessing complete!")
+            print(f"Total entries found: {total_entries}")
+            print(f"Successfully processed: {processed_entries}")
+            print(f"Tokenization mismatches found: {tokenization_mismatches}/{processed_entries} entries")
+    else:
+        print(f"Processed {processed_entries} entries successfully")
 
 
 def main(
     file_path: str = typer.Argument(..., help="Path to the JSONL file"),
     no_tokenization: bool = typer.Option(False, "--no-tokenization", help="Skip tokenization comparison"),
-    max_entries: int = typer.Option(5, "--max-entries", help="Maximum number of entries to process (0 for all)")
+    max_entries: int = typer.Option(5, "--max-entries", help="Maximum number of entries to process (0 for all)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output for all entries")
 ):
     """Process SFT JSONL data and compare tokenization methods."""
 
-    print("SFT JSONL Data Processor with Tokenization Comparison")
-    print("=" * 60)
+    if verbose:
+        print("SFT JSONL Data Processor with Tokenization Comparison")
+        print("=" * 60)
 
-    if no_tokenization:
-        print("Tokenization comparison disabled")
+        if no_tokenization:
+            print("Tokenization comparison disabled")
 
     # Fail fast - let any errors bubble up immediately
     load_and_process_jsonl(
         file_path=file_path,
         compare_tokenization=not no_tokenization,
-        max_entries=max_entries
+        max_entries=max_entries,
+        verbose=verbose
     )
 
 

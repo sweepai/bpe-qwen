@@ -119,22 +119,11 @@ fn is_hspace_only_no_nl(s: &str) -> bool {
     !s.chars().any(|c| c == '\n' || c == '\r') && s.chars().all(is_hspace)
 }
 
-fn split_off_last_char(s: &str) -> (&str, &str) {
-    if s.is_empty() {
-        return ("", "");
-    }
-
-    let mut last_char_start = s.len();
-    for (i, _) in s.char_indices() {
-        last_char_start = i;
-    }
-
-    if last_char_start == 0 {
-        // Single character
-        ("", s)
-    } else {
-        (&s[..last_char_start], &s[last_char_start..])
-    }
+fn split_off_last_char(s: &str) -> (String, String) {
+    if s.is_empty() { return (String::new(), String::new()); }
+    let mut last = 0;
+    for (i, _) in s.char_indices() { last = i; }
+    if last == 0 { (String::new(), s.to_string()) } else { (s[..last].to_string(), s[last..].to_string()) }
 }
 
 fn is_alnum_last(s: &str) -> bool {
@@ -207,25 +196,25 @@ fn fuse_hspace(tokens: &[String]) -> Vec<String> {
     while i < tokens.len() {
         let cur = &tokens[i];
 
-        let is_ws_no_nl = !cur.contains('\n') && !cur.contains('\r') && cur.chars().all(|c| c.is_whitespace());
+        let is_ws_no_nl = is_hspace_only_no_nl(cur);
         if is_ws_no_nl && i + 1 < tokens.len() {
             let next = &tokens[i + 1];
-            let (rest, last) = split_off_last_char_string(cur);
+            let (rest, last) = split_off_last_char(cur);
             let last_ch = last.chars().next().unwrap_or('\0');
             let has_rest = !rest.is_empty();
 
             // CASE A: next starts with letters -> donate one trailing hspace (space or tab)
             if starts_with_letters(next) {
                 if has_rest { out.push(rest); }
-                out.push(format!("{}{}", last, next));
+                out.push(format!("{}{}", last, next)); // " world" / "\tcode"
                 i += 2;
                 continue;
             }
 
             // CASE B: next starts with punctuation
             if starts_with_punct(next) {
-                // Opening apostrophe followed by letters needs to become " '" + "test"
                 if last_ch == ' ' {
+                    // Apostrophe opener: " '" + "word"
                     if let Some((punct, letters)) = split_punct_letters(next) {
                         if punct == "'" {
                             if has_rest { out.push(rest); }
@@ -233,15 +222,22 @@ fn fuse_hspace(tokens: &[String]) -> Vec<String> {
                             out.push(letters.to_string());
                             i += 2;
                             continue;
+                        } else {
+                            // General punct+letters: " <" + "Select", " ." + "filter", " @" + "NotNull", " \"" + "target"
+                            if has_rest { out.push(rest); }
+                            out.push(format!(" {}", punct));
+                            out.push(letters.to_string());
+                            i += 2;
+                            continue;
                         }
                     }
-                    // Other punctuation: merge the space
+                    // Pure punctuation (no letters): keep the merge (e.g. " */")
                     if has_rest { out.push(rest); }
-                    out.push(format!("{}{}", last, next)); // " " + ".filter" => " .filter"
+                    out.push(format!("{}{}", last, next));
                     i += 2;
                     continue;
                 } else if last_ch == '\t' {
-                    // Tabs do NOT merge to punctuation: split off as its own token
+                    // Tabs never merge into punctuation
                     if has_rest { out.push(rest); }
                     out.push("\t".to_string());
                     out.push(next.clone());
@@ -250,12 +246,11 @@ fn fuse_hspace(tokens: &[String]) -> Vec<String> {
                 }
             }
 
-            // CASE C: next starts with digit -> split off ONE space as its own token
+            // CASE C: digits — never glue space to numbers; split off one space
             if starts_with_digit(next) && last_ch == ' ' {
                 if has_rest { out.push(rest); }
                 out.push(" ".to_string());
-                // don't consume next; let loop handle it
-                i += 1;
+                i += 1; // let loop handle the number token next
                 continue;
             }
         }
@@ -657,5 +652,15 @@ mod tests {
         println!("Fast has \\r\\n token: {}", has_crlf_fast);
 
         assert!(matches, "Mismatch for '{}'\nSlow: {:?}\nFast: {:?}", text, slow, fast);
+    }
+
+    #[test]
+    fn test_sft_space_punct_letters() {
+        // Test cases for SFT tokenization fix: space + punctuation + letters
+        assert_eq!(pretokenize_fast(" <Select"), vec![" <", "Select"]);
+        assert_eq!(pretokenize_fast(" (options"), vec![" (", "options"]);
+        assert_eq!(pretokenize_fast(" @NotNull"), vec![" @", "NotNull"]);
+        assert_eq!(pretokenize_fast(" .filter"), vec![" .", "filter"]);
+        assert_eq!(pretokenize_fast(" \"target"), vec![" \"", "target"]);
     }
 }

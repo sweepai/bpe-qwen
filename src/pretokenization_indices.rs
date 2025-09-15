@@ -52,6 +52,28 @@ fn starts_with_letters_indices(text: &str, end_indices: &[usize], index: usize) 
     text[start..].chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
 }
 
+/// Split a token that starts with punctuation followed by letters
+/// Returns (punctuation_part, letters_part) if the pattern matches, None otherwise
+fn split_punct_letters(token: &str) -> Option<(&str, &str)> {
+    let mut chars = token.chars();
+    let first_char = chars.next()?;
+
+    // Check if first character is punctuation (not whitespace, not alphanumeric)
+    if first_char.is_whitespace() || first_char.is_alphanumeric() {
+        return None;
+    }
+
+    let rest = chars.as_str();
+
+    // Check if the rest starts with letters
+    if rest.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+        let punct_len = first_char.len_utf8();
+        Some((&token[..punct_len], &token[punct_len..]))
+    } else {
+        None
+    }
+}
+
 /// Fix contractions (opening quotes vs real contractions) - indices version
 fn fix_contractions_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
     let mut out = Vec::with_capacity(end_indices.len());
@@ -110,25 +132,39 @@ fn fuse_hspace_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
 
             // CASE B: next starts with punctuation
             if next_token.chars().next().map(|c| !c.is_whitespace() && !c.is_alphanumeric()).unwrap_or(false) {
-                // Opening apostrophe followed by letters needs to become " '" + "test"
                 if last_ch == ' ' {
-                    // Check if it's punct + letters pattern like 'test
-                    let mut next_chars = next_token.chars();
-                    let first_char = next_chars.next().unwrap_or('\0');
-                    if first_char == '\'' && next_chars.as_str().chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
-                        if has_rest {
-                            let split_pos = end_indices[i] - last_ch.len_utf8();
-                            out.push(split_pos);
+                    // If next is "punct + letters" (e.g. ".filter", "<Select", "@NotNull", "\"target")
+                    if let Some((punct, letters)) = split_punct_letters(next_token) {
+                        if punct == "'" {
+                            // Opening apostrophe + letters => " '" , "word"
+                            if has_rest {
+                                let split_pos = end_indices[i] - last_ch.len_utf8();
+                                out.push(split_pos);
+                            }
+                            // Push " '"
+                            let space_quote_end = end_indices[i] - last_ch.len_utf8() + " '".len();
+                            out.push(space_quote_end);
+                            // Push the letters part
+                            out.push(end_indices[i + 1]);
+                            i += 2;
+                            continue;
+                        } else {
+                            // General case: split punctuation from letters and attach the single space to the punct
+                            if has_rest {
+                                let split_pos = end_indices[i] - last_ch.len_utf8();
+                                out.push(split_pos);
+                            }
+                            // Push " " + punct (e.g., " .", " <", " @", " \"")
+                            let space_punct_end = end_indices[i] - last_ch.len_utf8() + " ".len() + punct.len();
+                            out.push(space_punct_end);
+                            // Push the letters part
+                            out.push(end_indices[i + 1]);
+                            i += 2;
+                            continue;
                         }
-                        // Push " '"
-                        let space_quote_end = end_indices[i] - last_ch.len_utf8() + " '".len();
-                        out.push(space_quote_end);
-                        // Push the letters part
-                        out.push(end_indices[i + 1]);
-                        i += 2;
-                        continue;
                     }
-                    // Other punctuation: merge the space
+
+                    // Otherwise: pure punctuation (no letters) — keep old behavior, merge the space
                     if has_rest {
                         let split_pos = end_indices[i] - last_ch.len_utf8();
                         out.push(split_pos);
@@ -137,7 +173,7 @@ fn fuse_hspace_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
                     i += 2;
                     continue;
                 } else if last_ch == '\t' {
-                    // Tabs do NOT merge to punctuation: split off as its own token
+                    // Tabs do NOT merge to punctuation: keep a standalone "\t"
                     if has_rest {
                         let split_pos = end_indices[i] - last_ch.len_utf8();
                         out.push(split_pos);
