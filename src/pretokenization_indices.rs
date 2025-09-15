@@ -134,7 +134,7 @@ fn fuse_hspace_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
             if next_token.chars().next().map(|c| !c.is_whitespace() && !c.is_alphanumeric()).unwrap_or(false) {
                 if last_ch == ' ' {
                     // If next is "punct + letters" (e.g. ".filter", "<Select", "@NotNull", "\"target")
-                    if let Some((punct, letters)) = split_punct_letters(next_token) {
+                    if let Some((punct, _letters)) = split_punct_letters(next_token) {
                         if punct == "'" {
                             // Opening apostrophe + letters => " '" , "word"
                             if has_rest {
@@ -185,16 +185,29 @@ fn fuse_hspace_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
                 }
             }
 
-            // CASE C: next starts with digit -> split off ONE space as its own token
-            if next_token.chars().next().map(|c| c.is_numeric()).unwrap_or(false) && last_ch == ' ' {
-                if has_rest {
-                    let split_pos = end_indices[i] - last_ch.len_utf8();
-                    out.push(split_pos);
+            // CASE C: next starts with digit
+            if next_token.chars().next().map(|c| c.is_numeric()).unwrap_or(false) {
+                if last_ch == ' ' {
+                    // Space before digits: emit one " " as its own token (never glue to digits)
+                    if has_rest {
+                        let split_pos = end_indices[i] - last_ch.len_utf8();
+                        out.push(split_pos);
+                    }
+                    out.push(end_indices[i]); // single space
+                    // don't consume next; let loop handle it
+                    i += 1;
+                    continue;
+                } else if last_ch == '\t' && cur_token.chars().all(|c| c == '\t') {
+                    // Tab before digits and hspace is ONLY tabs: split as ("<tabs except last>", "\t"), then digit
+                    if has_rest {
+                        let split_pos = end_indices[i] - last_ch.len_utf8();
+                        out.push(split_pos); // "\t\t"
+                    }
+                    out.push(end_indices[i]); // "\t"
+                    // don't consume next; let loop handle it
+                    i += 1;
+                    continue;
                 }
-                out.push(end_indices[i]); // single space
-                // don't consume next; let loop handle it
-                i += 1;
-                continue;
             }
         }
 
@@ -215,23 +228,19 @@ fn merge_double_quotes_indices(text: &str, end_indices: &[usize]) -> Vec<usize> 
             if next_token == "\"" {
                 let cur_token = get_token_at_index(text, end_indices, i);
 
-                // allow one leading space before the opening quote (from hspace donation)
+                // Only pair if prev is whitespace or at start
+                let prev_is_ws = i == 0 || out.last().map_or(false, |&_prev_end| {
+                    let prev_token = get_token_at_index(text, &out, out.len() - 1);
+                    prev_token.chars().all(|c| c.is_whitespace())
+                });
+
+                // allow one leading space donated to the opening quote
                 let rest = if let Some(stripped) = cur_token.strip_prefix(' ') { stripped } else { cur_token };
 
-                if rest.starts_with('"') {
-                    // count double quotes inside `rest`
+                if prev_is_ws && rest.starts_with('"') {
+                    // pair only if there's exactly one opening quote so far
                     let quote_count = rest.chars().filter(|&c| c == '"').count();
-
-                    // we merge only if there is exactly one `"` so far (i.e., it's an opening quote)
-                    // and (optionally) previous token does not contain tabs (to mimic your earlier guard)
-                    let prev_has_tabs = if i > 0 {
-                        let prev_token = get_token_at_index(text, &out, out.len() - 1);
-                        prev_token.contains('\t')
-                    } else {
-                        false
-                    };
-
-                    if quote_count == 1 && !prev_has_tabs {
+                    if quote_count == 1 {
                         // Merge: extend current token to include the closing quote
                         out.push(end_indices[i + 1]);
                         i += 2;
@@ -310,5 +319,52 @@ mod tests {
         let indices = pretokenize_fast_indices(text);
         let strings = indices_to_strings(text, &indices);
         assert_eq!(strings, vec!["I", "'ve", " got"]);
+    }
+
+    #[test]
+    fn test_space_punct_letters_split() {
+        // Test space + punct + letters cases
+        let text = " <Select";
+        let indices = pretokenize_fast_indices(text);
+        let strings = indices_to_strings(text, &indices);
+        assert_eq!(strings, vec![" <", "Select"]);
+
+        let text = " (options";
+        let indices = pretokenize_fast_indices(text);
+        let strings = indices_to_strings(text, &indices);
+        assert_eq!(strings, vec![" (", "options"]);
+
+        let text = " @NotNull";
+        let indices = pretokenize_fast_indices(text);
+        let strings = indices_to_strings(text, &indices);
+        assert_eq!(strings, vec![" @", "NotNull"]);
+
+        let text = " .filter";
+        let indices = pretokenize_fast_indices(text);
+        let strings = indices_to_strings(text, &indices);
+        assert_eq!(strings, vec![" .", "filter"]);
+
+        let text = " \"target";
+        let indices = pretokenize_fast_indices(text);
+        let strings = indices_to_strings(text, &indices);
+        assert_eq!(strings, vec![" \"", "target"]);
+    }
+
+    #[test]
+    fn test_quote_pairing_in_code() {
+        // Test that quotes don't pair inside code
+        let text = "x=(b\"x\")";
+        let indices = pretokenize_fast_indices(text);
+        let strings = indices_to_strings(text, &indices);
+        assert_eq!(strings, vec!["x", "=(", "b", "\"x", "\")"]);
+    }
+
+    #[test]
+    fn test_tabs_before_digits() {
+        // Test tabs before digits handling
+        let text = "\n\t\t\t9";
+        let indices = pretokenize_fast_indices(text);
+        let strings = indices_to_strings(text, &indices);
+        assert_eq!(strings, vec!["\n", "\t\t", "\t", "9"]);
     }
 }
