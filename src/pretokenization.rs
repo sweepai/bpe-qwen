@@ -82,29 +82,15 @@ fn merge_double_quotes(tokens: &[String]) -> Vec<String> {
 pub fn pretokenize_fast(text: &str) -> Vec<String> {
     // First pass: use the fast regex to get initial tokens
     let initial = pretokenize_fast_single_pass(text);
-    // Debug: for the failing case
-    if text.contains("quoted") {
-        eprintln!("DEBUG: Text='{}', Initial tokens: {:?}", text, initial);
-    }
 
     // Second pass: fix contractions (opening quotes vs real contractions)
     let fixed = fix_contractions(&initial);
-    if text.contains("quoted") {
-        eprintln!("DEBUG: After fix_contractions: {:?}", fixed);
-    }
 
     // Third pass: apply horizontal whitespace fusion rules
     let fused = fuse_hspace(&fixed);
-    if text.contains("quoted") {
-        eprintln!("DEBUG: After fuse_hspace: {:?}", fused);
-    }
 
     // Fourth pass: merge standalone trailing quotes with preceding quoted tokens
-    let result = merge_double_quotes(&fused);
-    if text.contains("quoted") {
-        eprintln!("DEBUG: After merge_double_quotes: {:?}", result);
-    }
-    result
+    merge_double_quotes(&fused)
 }
 
 /// Single-pass fast implementation using \z anchor instead of lookahead
