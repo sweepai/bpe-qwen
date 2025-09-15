@@ -9,6 +9,7 @@ import sys
 import os
 from pathlib import Path
 import typer
+from tqdm import tqdm
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -136,7 +137,7 @@ def analyze_tokenization_differences(results, text_name="text", verbose=False):
         return False
 
 
-def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=5, verbose=False):
+def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=0, verbose=False, break_on_error=True):
     """
     Load JSONL file and process each entry with prompt/completion format.
 
@@ -145,9 +146,20 @@ def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=5, 
         compare_tokenization (bool): Whether to compare tokenization methods
         max_entries (int): Maximum number of entries to process (0 for all)
         verbose (bool): Whether to show detailed output for all entries
+        break_on_error (bool): Whether to stop on first tokenization mismatch
     """
     if verbose:
         print(f"Loading JSONL file: {file_path}")
+
+    # First pass: count total lines for progress bar
+    total_lines = 0
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                total_lines += 1
+
+    # Determine how many entries we'll actually process
+    entries_to_process = min(total_lines, max_entries) if max_entries > 0 else total_lines
 
     total_entries = 0
     processed_entries = 0
@@ -155,51 +167,65 @@ def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=5, 
 
     # Fail fast - let file operations fail immediately if there are issues
     with open(file_path, 'r', encoding='utf-8') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
+        # Use tqdm for progress tracking
+        progress_bar = tqdm(total=entries_to_process, desc="Processing entries", disable=verbose)
 
-            total_entries += 1
+        try:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
 
-            # Fail fast - let JSON parsing fail immediately
-            data = json.loads(line)
+                total_entries += 1
 
-            # Fail fast - require both fields to be present
-            prompt = data['prompt']
-            completion = data['completion']
+                # Fail fast - let JSON parsing fail immediately
+                data = json.loads(line)
 
-            entry_has_mismatch = False
+                # Fail fast - require both fields to be present
+                prompt = data['prompt']
+                completion = data['completion']
 
-            # Compare tokenization methods if requested
-            if compare_tokenization:
-                # Tokenize prompt - fail fast on any tokenization errors
-                prompt_results = compare_tokenization_methods(prompt, f"prompt {processed_entries + 1}")
-                prompt_mismatch = analyze_tokenization_differences(prompt_results, f"prompt {processed_entries + 1}", verbose=verbose)
+                entry_has_mismatch = False
 
-                # Tokenize completion - fail fast on any tokenization errors
-                completion_results = compare_tokenization_methods(completion, f"completion {processed_entries + 1}")
-                completion_mismatch = analyze_tokenization_differences(completion_results, f"completion {processed_entries + 1}", verbose=verbose)
+                # Compare tokenization methods if requested
+                if compare_tokenization:
+                    # Tokenize prompt - fail fast on any tokenization errors
+                    prompt_results = compare_tokenization_methods(prompt, f"prompt {processed_entries + 1}")
+                    prompt_mismatch = analyze_tokenization_differences(prompt_results, f"prompt {processed_entries + 1}", verbose=verbose)
 
-                entry_has_mismatch = prompt_mismatch or completion_mismatch
-                if entry_has_mismatch:
-                    tokenization_mismatches += 1
+                    # Tokenize completion - fail fast on any tokenization errors
+                    completion_results = compare_tokenization_methods(completion, f"completion {processed_entries + 1}")
+                    completion_mismatch = analyze_tokenization_differences(completion_results, f"completion {processed_entries + 1}", verbose=verbose)
 
-            # Only show detailed entry info if there's a mismatch or verbose mode
-            if entry_has_mismatch or verbose:
-                print(f"\n--- Entry {processed_entries + 1} (Line {line_num}) ---")
-                print(f"Prompt length: {len(prompt)} characters")
-                print(f"Completion length: {len(completion)} characters")
-                print(f"Prompt preview: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
-                print(f"Completion preview: {completion[:100]}{'...' if len(completion) > 100 else ''}")
+                    entry_has_mismatch = prompt_mismatch or completion_mismatch
+                    if entry_has_mismatch:
+                        tokenization_mismatches += 1
 
-            processed_entries += 1
+                # Only show detailed entry info if there's a mismatch or verbose mode
+                if entry_has_mismatch or verbose:
+                    print(f"\n--- Entry {processed_entries + 1} (Line {line_num}) ---")
+                    print(f"Prompt length: {len(prompt)} characters")
+                    print(f"Completion length: {len(completion)} characters")
+                    print(f"Prompt preview: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
+                    print(f"Completion preview: {completion[:100]}{'...' if len(completion) > 100 else ''}")
 
-            # Optional: limit output for large files
-            if max_entries > 0 and processed_entries >= max_entries:
-                if verbose:
-                    print(f"\n... (showing first {max_entries} entries, total: {total_entries})")
-                break
+                processed_entries += 1
+                progress_bar.update(1)
+
+                # Break on first error if requested
+                if break_on_error and entry_has_mismatch:
+                    progress_bar.close()
+                    print(f"\n❌ Stopping on first tokenization mismatch (entry {processed_entries})")
+                    return
+
+                # Optional: limit output for large files
+                if max_entries > 0 and processed_entries >= max_entries:
+                    if verbose:
+                        print(f"\n... (showing first {max_entries} entries, total: {total_entries})")
+                    break
+
+        finally:
+            progress_bar.close()
 
     # Always show final summary
     if compare_tokenization:
@@ -217,8 +243,9 @@ def load_and_process_jsonl(file_path, compare_tokenization=True, max_entries=5, 
 def main(
     file_path: str = typer.Argument(..., help="Path to the JSONL file"),
     no_tokenization: bool = typer.Option(False, "--no-tokenization", help="Skip tokenization comparison"),
-    max_entries: int = typer.Option(5, "--max-entries", help="Maximum number of entries to process (0 for all)"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output for all entries")
+    max_entries: int = typer.Option(0, "--max-entries", help="Maximum number of entries to process (0 for all)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output for all entries"),
+    break_on_error: bool = typer.Option(True, "--break-on-error/--no-break-on-error", help="Stop processing on first tokenization mismatch")
 ):
     """Process SFT JSONL data and compare tokenization methods."""
 
@@ -234,7 +261,8 @@ def main(
         file_path=file_path,
         compare_tokenization=not no_tokenization,
         max_entries=max_entries,
-        verbose=verbose
+        verbose=verbose,
+        break_on_error=break_on_error
     )
 
 
