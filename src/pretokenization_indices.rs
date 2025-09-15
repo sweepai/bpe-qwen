@@ -19,16 +19,9 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
         let end = mat.end();
         let mat_str = mat.as_str();
 
-        // Check if this match starts with a double quote and we have a closing quote next
-        if mat_str.starts_with('"') && mat_str.len() > 1 && i + 1 < matches.len() {
-            let next = matches[i + 1].as_str();
-            if next == "\"" {
-                // Merge the quoted string with the closing quote
-                result.push(matches[i + 1].end());
-                i += 2;
-                continue;
-            }
-        }
+        // Note: Previously there was logic here to merge quoted strings like "context" into single tokens,
+        // but this caused inconsistency with the string-based tokenization which keeps quotes separate.
+        // The string implementation produces ['"context', '"'] not ['"context"'], so we removed the merging.
 
         // Check if this match is a contraction pattern that might have incorrectly split a word
         if mat_str == "'s" || mat_str == "'t" || mat_str == "'re" || mat_str == "'ve" ||
@@ -132,6 +125,25 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
                         // For punctuation/other non-whitespace, non-alphabetic, non-numeric
                         // The pattern ` ?[^\s\p{L}\p{N}]+` matches space + punctuation
                         // But we need to be careful not to create tokens that would be split by contractions
+
+                        // Special case: Don't merge tab characters with following punctuation
+                        // Tab should always remain separate from punctuation like @, ", ., etc.
+                        if mat_str.contains('\t') {
+                            // Keep tabs separate from punctuation
+                            let space_chars: Vec<char> = mat_str.chars().collect();
+                            if space_chars.len() > 1 {
+                                let split_pos = end - mat_str.chars().last().unwrap().len_utf8();
+                                result.push(split_pos);
+                                result.push(end);
+                                i += 1;
+                                continue;
+                            } else {
+                                // Single tab - keep separate
+                                result.push(end);
+                                i += 1;
+                                continue;
+                            }
+                        }
 
                         // Check if next token starts with a single quote and could be a contraction
                         if next.starts_with('\'') && next.len() > 1 {

@@ -389,6 +389,39 @@ class TestIndicesSpecific:
             assert indices_result == fast_result, f"Indices result doesn't match fast result for '{text}': {indices_result} != {fast_result}"
 
 
+class TestTabPatterns:
+    """Test cases for tab-based patterns that cause tokenization mismatches."""
+
+    def test_tokenization_mismatch_edge_cases(self):
+        """Test edge cases that cause mismatches between slow and fast tokenization."""
+        edge_cases = [
+            # These patterns SHOULD tokenize the same but DON'T
+            '\t@Override',
+            '\t"context"',
+            '\t.filter',
+            '\thead',
+            '\n\n\t@Test\n',
+            # Additional edge cases found in real data
+            '\t"fmt"',           # Common Go import pattern
+            '\t@Test',           # Java test annotation
+            '\t\t.filter',       # Multiple tabs + method
+            '\t\t"context"',     # Multiple tabs + quoted string
+        ]
+
+        for text in edge_cases:
+            slow, fast, indices_result = compare_with_string_tokenization(text)
+
+            # These should all match, but currently they don't - this documents the bug
+            print(f"\nTesting: {text!r}")
+            print(f"Slow:    {slow}")
+            print(f"Fast:    {fast}")
+            print(f"Indices: {indices_result}")
+
+            # The main assertion - this should pass but currently fails
+            assert slow == fast, f"BUG: Tokenization mismatch for '{text}': slow={slow}, fast={fast}"
+            assert indices_result == fast, f"BUG: Indices mismatch for '{text}': indices={indices_result}, fast={fast}"
+
+
 class TestPerformanceRegression:
     """Ensure fixes don't regress performance too much."""
 
