@@ -408,6 +408,17 @@ class TestTabPatterns:
             '\t\t"context"',     # Multiple tabs + quoted string
 
             # New patterns from batch tokenization errors
+            'import (\n\t"net/http"',
+            'import (\n\t"context"',
+            'import (\n\t"fmt"',
+            'import (\n\t"testing"',
+            'import (\n\t"bytes"',
+            '.unwrap()',
+            '*out = *',
+            '{Name:',
+            '@Override\n\tpublic',
+            "\n\t@Override\n\tpublic",  # Java method annotation
+
             # Contraction patterns after spaces
             " 'd",               # Contraction after space
             " 're",              # Another contraction
