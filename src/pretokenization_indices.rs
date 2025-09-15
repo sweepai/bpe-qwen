@@ -17,19 +17,39 @@ fn get_token_at_index<'a>(text: &'a str, end_indices: &[usize], index: usize) ->
 }
 
 fn is_alnum_last_indices(text: &str, end_indices: &[usize], index: usize) -> bool {
-    let token = get_token_at_index(text, end_indices, index);
-    token.chars().rev().find(|c| !c.is_whitespace()).map_or(false, |c| c.is_alphanumeric())
+    let start = if index == 0 { 0 } else { end_indices[index - 1] };
+    let end = end_indices[index];
+    if start >= end { return false; }
+
+    // Get last non-whitespace character directly
+    text[start..end].chars().rev().find(|c| !c.is_whitespace()).map_or(false, |c| c.is_alphanumeric())
 }
 
 fn is_contraction_indices(text: &str, end_indices: &[usize], index: usize) -> bool {
-    let token = get_token_at_index(text, end_indices, index);
-    matches!(&token.to_ascii_lowercase()[..],
-        "'s" | "'t" | "'re" | "'ve" | "'m" | "'ll" | "'d")
+    let start = if index == 0 { 0 } else { end_indices[index - 1] };
+    let end = end_indices[index];
+    let token_bytes = &text.as_bytes()[start..end];
+
+    // Fast direct byte comparison without string allocation
+    match token_bytes {
+        [b'\'', b's'] | [b'\'', b'S'] => true,
+        [b'\'', b't'] | [b'\'', b'T'] => true,
+        [b'\'', b'm'] | [b'\'', b'M'] => true,
+        [b'\'', b'd'] | [b'\'', b'D'] => true,
+        [b'\'', b'r', b'e'] | [b'\'', b'R', b'e'] | [b'\'', b'r', b'E'] | [b'\'', b'R', b'E'] => true,
+        [b'\'', b'v', b'e'] | [b'\'', b'V', b'e'] | [b'\'', b'v', b'E'] | [b'\'', b'V', b'E'] => true,
+        [b'\'', b'l', b'l'] | [b'\'', b'L', b'l'] | [b'\'', b'l', b'L'] | [b'\'', b'L', b'L'] => true,
+        _ => false,
+    }
 }
 
 fn starts_with_letters_indices(text: &str, end_indices: &[usize], index: usize) -> bool {
-    let token = get_token_at_index(text, end_indices, index);
-    token.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
+    let start = if index == 0 { 0 } else { end_indices[index - 1] };
+    let end = end_indices[index];
+    if start >= end { return false; }
+
+    // Get first character directly without string slice
+    text[start..].chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
 }
 
 /// Fix contractions (opening quotes vs real contractions) - indices version
