@@ -15,7 +15,7 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import tokenization functions - fail fast if not available
-from bpe_qwen.bpe_qwen import pretokenize_slow, pretokenize_fast
+from bpe_qwen.bpe_qwen import pretokenize_slow
 from bpe_qwen.bpe_qwen import pretokenize_fast_indices, indices_to_strings
 
 
@@ -32,14 +32,12 @@ def compare_tokenization_methods(text, text_name="text"):
     """
     # Fail fast - let any errors bubble up immediately
     slow_result = pretokenize_slow(text)
-    fast_result = pretokenize_fast(text)
 
     indices = pretokenize_fast_indices(text)
     indices_result = indices_to_strings(text, indices)
 
     return {
         'slow': slow_result,
-        'fast': fast_result,
         'indices': indices_result
     }
 
@@ -95,24 +93,11 @@ def analyze_tokenization_differences(results, text_name="text", verbose=False):
     """
     # Fail fast - expect all results to be present
     slow = results['slow']
-    fast = results['fast']
     indices = results['indices']
 
     # Check for mismatches and show context
     mismatches = []
     has_mismatch = False
-
-    if slow != fast:
-        mismatches.append("slow vs fast")
-        if not has_mismatch:
-            show_mismatch_context(slow, fast, "slow", "fast")
-            has_mismatch = True
-
-    if fast != indices:
-        mismatches.append("fast vs indices")
-        if not has_mismatch:
-            show_mismatch_context(fast, indices, "fast", "indices")
-            has_mismatch = True
 
     if slow != indices:
         mismatches.append("slow vs indices")
@@ -123,7 +108,6 @@ def analyze_tokenization_differences(results, text_name="text", verbose=False):
     if mismatches:
         print(f"\n--- Tokenization Analysis for {text_name} ---")
         print(f"Slow tokens ({len(slow)}): {slow[:5]}{'...' if len(slow) > 5 else ''}")
-        print(f"Fast tokens ({len(fast)}): {fast[:5]}{'...' if len(fast) > 5 else ''}")
         print(f"Indices tokens ({len(indices)}): {indices[:5]}{'...' if len(indices) > 5 else ''}")
         print(f"⚠️  TOKENIZATION MISMATCHES: {', '.join(mismatches)}")
         return True
@@ -131,7 +115,6 @@ def analyze_tokenization_differences(results, text_name="text", verbose=False):
         if verbose:
             print(f"\n--- Tokenization Analysis for {text_name} ---")
             print(f"Slow tokens ({len(slow)}): {slow[:5]}{'...' if len(slow) > 5 else ''}")
-            print(f"Fast tokens ({len(fast)}): {fast[:5]}{'...' if len(fast) > 5 else ''}")
             print(f"Indices tokens ({len(indices)}): {indices[:5]}{'...' if len(indices) > 5 else ''}")
             print("✅ All tokenization methods match")
         return False
