@@ -449,6 +449,15 @@ class TestTokenizationMismatchEdgeCases:
             '\t.filter',
             '\thead',
             '\n\n\t@Test\n',
+            # Additional edge cases found in real data
+            '\t"fmt"',           # Common Go import pattern
+            '\t"io"',            # Another common import
+            '\t@Test',           # Java test annotation
+            '\t@GetMapping',     # Spring annotation
+            '\t@RequestMapping', # Another Spring annotation
+            '\t\t.filter',       # Multiple tabs + method
+            '\t\t"context"',     # Multiple tabs + quoted string
+            ' \t@Override',      # Space + tab + annotation
         ]
 
         for text in edge_cases:

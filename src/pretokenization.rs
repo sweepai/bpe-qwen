@@ -129,6 +129,26 @@ pub fn pretokenize_fast_with_regex(text: &str, regex: &Regex) -> Vec<String> {
         if mat.chars().all(|c| c.is_whitespace())
             && !mat.contains('\r')
             && !mat.contains('\n') {
+
+            // Special handling for consecutive tabs - split them into individual tokens
+            if mat.len() > 1 && mat.chars().all(|c| c == '\t') {
+                // Split multiple consecutive tabs into individual tab tokens
+                for _ in 0..mat.len() {
+                    result.push("\t".to_string());
+                }
+                i += 1;
+                continue;
+            }
+
+            // Special handling for mixed whitespace - split each character individually
+            if mat.len() > 1 && mat.contains('\t') {
+                // Split mixed whitespace (space + tab combinations) into individual tokens
+                for c in mat.chars() {
+                    result.push(c.to_string());
+                }
+                i += 1;
+                continue;
+            }
             // Check what follows this match
             if i + 1 < matches.len() {
                 let next = matches[i + 1].as_str();
