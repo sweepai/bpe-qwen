@@ -11,6 +11,15 @@
 
 ## Testing Guidelines
 
+### Build Commands
+```bash
+# Development build (slower, for debugging)
+maturin develop
+
+# Release build (optimized, for performance testing)
+maturin develop --release
+```
+
 ### Test Commands
 ```bash
 # Run specific test file
@@ -92,3 +101,9 @@ Install with: `uv pip install -e ".[dev]"`
 - Let them fail! Don't wrap in try/except
 - Check that required data files exist in `data/` directory
 - Ensure tokenizer dependencies are properly installed
+
+### Performance Testing
+- **CRITICAL: Always use `maturin develop --release` for performance testing**
+- Debug builds can be 5-10x slower than release builds
+- Never benchmark or compare performance using debug builds
+- The `--release` flag enables Rust compiler optimizations
