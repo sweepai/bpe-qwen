@@ -247,14 +247,23 @@ fn merge_trailing_quote_indices(text: &str, end_indices: &[usize], quote: char) 
                 let cur_stripped = cur.strip_prefix(' ').unwrap_or(cur);
 
                 if prev_is_ws && cur_stripped.starts_with(quote) {
-                    // avoid merging bare contractions like "'s", "'t", etc.
-                    // we want cases like "'serviceaccount" + "'" -> "'serviceaccount'"
+                    // --- NEW GUARD 1: avoid merging bare contractions (you already had this) ---
                     let is_bare_contr = matches!(cur_stripped.as_bytes(),
                         b"\'s" | b"\'S" | b"\'t" | b"\'T" | b"\'m" | b"\'M" | b"\'d" | b"\'D" |
                         b"\'re" | b"\'RE" | b"\'ve" | b"\'VE" | b"\'ll" | b"\'LL"
                     );
-                    if !is_bare_contr {
-                        out.push(end_indices[i + 1]); // extend to include the closing quote
+
+                    // --- NEW GUARD 2: don't merge if inner content length is exactly 1 ---
+                    // (matches the slow tokenizer behavior seen for `"x"`/`'y'`)
+                    let mut inner = cur_stripped[quote.len_utf8()..].chars();
+                    let one = inner.next();
+                    let two = inner.next(); // second char (if any)
+                    let is_single_inner_alnum =
+                        one.is_some() && two.is_none() && one.unwrap().is_alphanumeric();
+
+                    if !is_bare_contr && !is_single_inner_alnum {
+                        // merge: extend current token to include the closing quote
+                        out.push(end_indices[i + 1]);
                         i += 2;
                         continue;
                     }
