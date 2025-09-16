@@ -207,10 +207,14 @@ fn fuse_hspace_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
                     i += 1;                   // number handled next
                     continue;
                 }
-                // Keep tab runs intact before digits (recommended policy)
-                if cur_token.chars().all(|c| c == '\t') {
-                    out.push(end_indices[i]); // keep "\t\t..." intact
-                    i += 1;
+                // Tabs before digits: split into (tabs_except_last) + (single '\t'), then digit
+                if last_ch == '\t' && cur_token.chars().all(|c| c == '\t') {
+                    if has_rest {
+                        let split_pos = end_indices[i] - last_ch.len_utf8();
+                        out.push(split_pos);      // "\t\t... (n-1)"
+                    }
+                    out.push(end_indices[i]);     // last "\t"
+                    i += 1;                       // digit handled next
                     continue;
                 }
             }
@@ -364,11 +368,11 @@ mod tests {
 
     #[test]
     fn test_tabs_before_digits() {
-        // Test tabs before digits handling - keep tab runs intact
+        // "\n\t\t\t9" → split tabs as (n-1) + 1, then digit
         let text = "\n\t\t\t9";
         let indices = pretokenize_fast_indices(text);
         let strings = indices_to_strings(text, &indices);
-        assert_eq!(strings, vec!["\n", "\t\t\t", "9"]);
+        assert_eq!(strings, vec!["\n", "\t\t", "\t", "9"]);
     }
 
     #[test]
@@ -410,11 +414,11 @@ mod tests {
 
     #[test]
     fn test_tabs_with_double_digits() {
-        // Test the specific case mentioned: "\t\t10"
+        // Test the specific case mentioned: "\t\t10" - split tabs before digits
         let text = "\t\t10";
         let indices = pretokenize_fast_indices(text);
         let strings = indices_to_strings(text, &indices);
-        assert_eq!(strings, vec!["\t\t", "1", "0"]);
+        assert_eq!(strings, vec!["\t", "\t", "1", "0"]);
     }
 
     #[test]
@@ -425,11 +429,11 @@ mod tests {
         let strings = indices_to_strings(text, &indices);
         assert_eq!(strings, vec![" '<", "link"]);
 
-        // Edge case 2: Tabs before digits should be consistent
+        // Edge case 2: Tabs before digits should be consistent (split policy)
         let text = "\t\t\t\t1";
         let indices = pretokenize_fast_indices(text);
         let strings = indices_to_strings(text, &indices);
-        assert_eq!(strings, vec!["\t\t\t\t", "1"]);
+        assert_eq!(strings, vec!["\t\t\t", "\t", "1"]);
 
         // Edge case 3: Quote pairing should work
         let text = "\"Register\"";
