@@ -57,7 +57,17 @@ def compare_tokenization_methods(auto_linear_tokenizer, hf_tokenizer, text, text
 
     # Check for mismatches
     tokens_match = auto_token_ids == hf_token_ids
-    decoded_match = auto_decoded == hf_decoded or auto_decoded.strip() == hf_decoded.strip()
+
+    # More robust decoded text comparison
+    if auto_decoded == hf_decoded:
+        decoded_match = True
+    elif auto_decoded.strip() == hf_decoded.strip():
+        decoded_match = True
+    elif text.strip() == "" and auto_decoded.strip() == hf_decoded.strip():
+        # For empty or whitespace-only text, both might normalize differently
+        decoded_match = True
+    else:
+        decoded_match = False
 
     return {
         'auto_linear': {
@@ -108,16 +118,16 @@ def show_mismatch_context(list1, list2, name1, name2, context_size=3):
 
     # Show context for first list
     context1 = list1[start:end1]
-    print(f"{name1:>12}: {context1}")
+    print(f"{name1:>8}: {context1}")
 
     # Show context for second list
     context2 = list2[start:end2]
-    print(f"{name2:>12}: {context2}")
+    print(f"{name2:>8}: {context2}")
 
     # Show pointer to mismatch position
     pointer_pos = mismatch_pos - start
     if pointer_pos < len(context1) and pointer_pos < len(context2):
-        spaces = " " * (15 + sum(len(repr(token)) + 2 for token in context1[:pointer_pos]))
+        spaces = " " * (11 + sum(len(repr(token)) + 2 for token in context1[:pointer_pos]))
         print(f"{spaces}^ mismatch here")
 
 
@@ -159,6 +169,16 @@ def analyze_tokenization_results(results, text_name="text", verbose=False):
                 print("   - Decoded text differs")
                 print(f"   AutoLinear decoded: {repr(auto_results['decoded_text'][:100])}")
                 print(f"   HuggingFace decoded: {repr(hf_results['decoded_text'][:100])}")
+                print(f"   AutoLinear length: {len(auto_results['decoded_text'])}")
+                print(f"   HuggingFace length: {len(hf_results['decoded_text'])}")
+                # Show character-by-character diff for debugging
+                if len(auto_results['decoded_text']) != len(hf_results['decoded_text']):
+                    print("   Length mismatch detected!")
+                else:
+                    for i, (a, h) in enumerate(zip(auto_results['decoded_text'], hf_results['decoded_text'])):
+                        if a != h:
+                            print(f"   First char diff at position {i}: {repr(a)} vs {repr(h)}")
+                            break
         else:
             print("✅ Tokenization methods match")
 
