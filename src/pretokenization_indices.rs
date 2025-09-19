@@ -1,4 +1,4 @@
-use crate::pretokenization::GLOBAL_QWEN_FAST_REGEX;
+use crate::pretokenization::{GLOBAL_QWEN_FAST_REGEX, GLOBAL_QWEN_REGEX};
 
 /// Single-pass fast implementation using \z anchor instead of lookahead (indices version)
 fn pretokenize_fast_single_pass_indices(text: &str) -> Vec<usize> {
@@ -41,6 +41,14 @@ fn is_contraction_indices(text: &str, end_indices: &[usize], index: usize) -> bo
         [b'\'', b'l', b'l'] | [b'\'', b'L', b'l'] | [b'\'', b'l', b'L'] | [b'\'', b'L', b'L'] => true,
         _ => false,
     }
+}
+
+fn token_is_ascii_spaces_only(text: &str, end_indices: &[usize], index: usize) -> bool {
+    if index >= end_indices.len() { return false; }
+    let start = if index == 0 { 0 } else { end_indices[index - 1] };
+    let end = end_indices[index];
+    if start >= end { return false; }
+    text[start..end].chars().all(|c| c == ' ')
 }
 
 fn starts_with_letters_indices(text: &str, end_indices: &[usize], index: usize) -> bool {
@@ -99,10 +107,30 @@ fn fix_contractions_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
                 i += 1;
                 continue;
             } else {
-                // opening quote case: merge "'ve" + "rbose" => "'verbose"
-                out.push(end_indices[i + 1]);
-                i += 2;
-                continue;
+                // Opening quote case: merge only in safe contexts.
+                // To better match slow tokenizer in code/tab contexts, avoid merging
+                // when the preceding token contains tabs/newlines or is non-space whitespace.
+                let allow_merge_opening = if out.is_empty() {
+                    true // start-of-string
+                } else {
+                    let prev_is_spaces_only = token_is_ascii_spaces_only(text, &out, out.len() - 1);
+                    let prev_tok = get_token_at_index(text, &out, out.len() - 1);
+                    let prev_has_tab_or_nl = prev_tok.contains('\t') || prev_tok.contains('\n') || prev_tok.contains('\r');
+                    // Allow only if previous is ASCII spaces only (no tabs/newlines)
+                    prev_is_spaces_only && !prev_has_tab_or_nl
+                };
+
+                if allow_merge_opening {
+                    // merge "'ve" + "rbose" => "'verbose"
+                    out.push(end_indices[i + 1]);
+                    i += 2;
+                    continue;
+                } else {
+                    // do not merge; keep as split to mimic slow behavior in these contexts
+                    out.push(end_indices[i]);
+                    i += 1;
+                    continue;
+                }
             }
         }
         out.push(end_indices[i]);
@@ -243,10 +271,25 @@ fn merge_trailing_quote_indices(text: &str, end_indices: &[usize], quote: char) 
                     prev_tok.chars().all(|c| c.is_whitespace())
                 });
 
+                // Guard: do not merge a trailing quote if the preceding token contains tabs.
+                // This mirrors the slow/fancy behavior observed in real code and reduces
+                // mismatches in tab-indented contexts like: \t"preview" / \t"wayland".
+                let prev_has_tabs = if i == 0 { false } else { out.last().map_or(false, |&_prev_end| {
+                    let prev_tok = get_token_at_index(text, &out, out.len() - 1);
+                    prev_tok.contains('\t')
+                }) };
+
                 // Allow a leading donated space
                 let cur_stripped = cur.strip_prefix(' ').unwrap_or(cur);
 
                 if prev_is_ws && cur_stripped.starts_with(quote) {
+                    if prev_has_tabs {
+                        // Keep as-is if previous token had tabs
+                        out.push(end_indices[i]);
+                        i += 1;
+                        continue;
+                    }
+
                     // --- NEW GUARD 1: avoid merging bare contractions (you already had this) ---
                     let is_bare_contr = matches!(cur_stripped.as_bytes(),
                         b"\'s" | b"\'S" | b"\'t" | b"\'T" | b"\'m" | b"\'M" | b"\'d" | b"\'D" |
@@ -283,11 +326,49 @@ fn merge_trailing_quote_indices(text: &str, end_indices: &[usize], quote: char) 
 /// Uses native multi-pass approach entirely in indices space for maximum efficiency
 pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
     let initial = pretokenize_fast_single_pass_indices(text);
-    let fixed   = fix_contractions_indices(text, &initial);
+    let split_ws = split_mixed_whitespace_indices(text, &initial);
+    let fixed   = fix_contractions_indices(text, &split_ws);
     let fused   = fuse_hspace_indices(text, &fixed);
     let merged1 = merge_trailing_quote_indices(text, &fused, '"');
     let merged2 = merge_trailing_quote_indices(text, &merged1, '\'');
     merged2
+}
+
+/// Split any whitespace-only token that contains mixed types of horizontal whitespace
+/// (e.g., space + tab, space + NBSP) into per-character tokens. Newlines are excluded.
+fn split_mixed_whitespace_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
+    if end_indices.is_empty() { return Vec::new(); }
+    let mut out: Vec<usize> = Vec::with_capacity(end_indices.len());
+    let mut prev_end = 0usize;
+    for &end in end_indices {
+        let tok = &text[prev_end..end];
+        let is_ws_no_nl = !tok.contains('\n') && !tok.contains('\r') && tok.chars().all(|c| c.is_whitespace());
+        if is_ws_no_nl {
+            // Only split whitespace tokens that are composed entirely of non-ASCII
+            // whitespace (neither ' ' nor '\t'). This handles sequences like U+2003
+            // em-spaces so that "\u2003\u2003" becomes two tokens, matching slow.
+            let mut all_simple = true; // only space or tab
+            for ch in tok.chars() {
+                if ch != ' ' && ch != '\t' { all_simple = false; break; }
+            }
+
+            if all_simple {
+                // Keep as a single token; later passes will handle donation/splitting
+                out.push(end);
+            } else {
+                // Split each non-simple whitespace char into its own token
+                let mut byte_off = prev_end;
+                for ch in tok.chars() {
+                    byte_off += ch.len_utf8();
+                    out.push(byte_off);
+                }
+            }
+        } else {
+            out.push(end);
+        }
+        prev_end = end;
+    }
+    out
 }
 
 
