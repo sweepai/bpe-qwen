@@ -419,6 +419,10 @@ def load_and_process_jsonl(file_path, tokenize_text=True, max_entries=0, verbose
 
     # Always show final summary
     if tokenize_text and auto_tokenizer and hf_tokenizer:
+        # Calculate match percentage
+        matching_entries = processed_entries - tokenization_mismatches
+        match_percentage = (matching_entries / processed_entries) * 100 if processed_entries > 0 else 0
+
         if tokenization_mismatches == 0:
             print(f"✅ All {processed_entries} entries passed tokenization validation")
         else:
@@ -426,6 +430,8 @@ def load_and_process_jsonl(file_path, tokenize_text=True, max_entries=0, verbose
             print(f"Total entries found: {total_entries}")
             print(f"Successfully processed: {processed_entries}")
             print(f"Tokenization mismatches found: {tokenization_mismatches}/{processed_entries} entries")
+
+        print(f"📊 Match percentage: {match_percentage:.2f}% ({matching_entries}/{processed_entries} entries matched base tokenization)")
 
         print(f"\n--- Tokenization Comparison Statistics ---")
         print(f"AutoLinear prompt tokens: {total_auto_prompt_tokens:,}")
