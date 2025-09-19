@@ -1,4 +1,4 @@
-use crate::pretokenization::{GLOBAL_QWEN_FAST_REGEX, GLOBAL_QWEN_REGEX};
+use crate::pretokenization::GLOBAL_QWEN_FAST_REGEX;
 
 /// Single-pass fast implementation using \z anchor instead of lookahead (indices version)
 fn pretokenize_fast_single_pass_indices(text: &str) -> Vec<usize> {
@@ -345,24 +345,32 @@ fn split_mixed_whitespace_indices(text: &str, end_indices: &[usize]) -> Vec<usiz
         let tok = &text[prev_end..end];
         let is_ws_no_nl = !tok.contains('\n') && !tok.contains('\r') && tok.chars().all(|c| c.is_whitespace());
         if is_ws_no_nl {
-            // Only split whitespace tokens that are composed entirely of non-ASCII
-            // whitespace (neither ' ' nor '\t'). This handles sequences like U+2003
-            // em-spaces so that "\u2003\u2003" becomes two tokens, matching slow.
-            let mut all_simple = true; // only space or tab
+            // If whitespace token mixes different kinds (e.g., ' ' + '\t' or ' ' + NBSP),
+            // split off the final codepoint as its own token. This mirrors how the string
+            // tokenizer handles donation using the last character while keeping the rest.
+            let mut distinct: Option<char> = None;
+            let mut mixed = false;
+            let mut last_char: Option<char> = None;
             for ch in tok.chars() {
-                if ch != ' ' && ch != '\t' { all_simple = false; break; }
+                last_char = Some(ch);
+                if let Some(first) = distinct {
+                    if ch != first { mixed = true; }
+                } else {
+                    distinct = Some(ch);
+                }
             }
 
-            if all_simple {
-                // Keep as a single token; later passes will handle donation/splitting
-                out.push(end);
-            } else {
-                // Split each non-simple whitespace char into its own token
-                let mut byte_off = prev_end;
-                for ch in tok.chars() {
-                    byte_off += ch.len_utf8();
-                    out.push(byte_off);
+            if mixed {
+                if let Some(last) = last_char {
+                    let split_at = end - last.len_utf8();
+                    // Push the prefix (all but last char), then the last char
+                    if split_at > prev_end { out.push(split_at); }
+                    out.push(end);
+                } else {
+                    out.push(end);
                 }
+            } else {
+                out.push(end);
             }
         } else {
             out.push(end);
