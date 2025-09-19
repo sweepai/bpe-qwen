@@ -85,7 +85,7 @@ def compare_tokenization_methods(auto_linear_tokenizer, hf_tokenizer, text, text
         'comparison': {
             'tokens_match': tokens_match,
             'decoded_match': decoded_match,
-            'has_mismatch': not (tokens_match and decoded_match),
+            'has_mismatch': not tokens_match,
         },
         'char_count': len(text)
     }
@@ -131,7 +131,68 @@ def show_mismatch_context(list1, list2, name1, name2, context_size=3):
         print(f"{spaces}^ mismatch here")
 
 
-def analyze_tokenization_results(results, text_name="text", verbose=False):
+def show_token_mismatch_with_decoded(auto_token_ids, hf_token_ids, auto_tokenizer, hf_tokenizer, context_size=5):
+    """
+    Show context around the first mismatch between two token lists with both token IDs and decoded strings.
+
+    Args:
+        auto_token_ids: AutoLinear token IDs
+        hf_token_ids: HuggingFace token IDs
+        auto_tokenizer: AutoLinear tokenizer instance
+        hf_tokenizer: HuggingFace tokenizer instance
+        context_size: Number of tokens to show before and after mismatch
+    """
+    mismatch_pos = find_first_mismatch_position(auto_token_ids, hf_token_ids)
+    if mismatch_pos == -1:
+        print("   No token ID mismatch found")
+        return
+
+    print(f"\n🔍 First token mismatch at position {mismatch_pos}:")
+
+    # Calculate context window
+    start = max(0, mismatch_pos - context_size)
+    auto_end = min(len(auto_token_ids), mismatch_pos + context_size + 1)
+    hf_end = min(len(hf_token_ids), mismatch_pos + context_size + 1)
+
+    # Get context token IDs
+    auto_context_ids = auto_token_ids[start:auto_end]
+    hf_context_ids = hf_token_ids[start:hf_end]
+
+    # Decode individual tokens
+    auto_context_decoded = []
+    hf_context_decoded = []
+
+    for token_id in auto_context_ids:
+        try:
+            decoded = auto_tokenizer.decode([token_id])
+            auto_context_decoded.append(decoded)
+        except:
+            auto_context_decoded.append(f"<ERROR:{token_id}>")
+
+    for token_id in hf_context_ids:
+        try:
+            decoded = hf_tokenizer.decode([token_id])
+            hf_context_decoded.append(decoded)
+        except:
+            hf_context_decoded.append(f"<ERROR:{token_id}>")
+
+    # Show token IDs with position markers
+    print(f"   Token positions: {list(range(start, start + len(auto_context_ids)))}")
+    print(f"   AutoLinear IDs:  {auto_context_ids}")
+    print(f"   HuggingFace IDs: {hf_context_ids}")
+
+    # Show decoded tokens
+    print(f"   AutoLinear decoded:  {[repr(token) for token in auto_context_decoded]}")
+    print(f"   HuggingFace decoded: {[repr(token) for token in hf_context_decoded]}")
+
+    # Show pointer to mismatch position
+    pointer_pos = mismatch_pos - start
+    if pointer_pos < len(auto_context_ids) and pointer_pos < len(hf_context_ids):
+        print(f"   Mismatch at position {mismatch_pos}: {auto_context_ids[pointer_pos]} vs {hf_context_ids[pointer_pos]}")
+        print(f"   Decoded mismatch: {repr(auto_context_decoded[pointer_pos])} vs {repr(hf_context_decoded[pointer_pos])}")
+
+
+def analyze_tokenization_results(results, text_name="text", verbose=False, auto_tokenizer=None, hf_tokenizer=None):
     """
     Analyze tokenization comparison results and show statistics.
 
@@ -161,10 +222,21 @@ def analyze_tokenization_results(results, text_name="text", verbose=False):
 
         if has_mismatch:
             print(f"⚠️  TOKENIZATION MISMATCH DETECTED!")
+
             if not comparison['tokens_match']:
                 print("   - Token IDs differ")
-                show_mismatch_context(auto_results['token_ids'], hf_results['token_ids'],
-                                    "AutoLinear", "HuggingFace")
+                if auto_tokenizer and hf_tokenizer:
+                    show_token_mismatch_with_decoded(auto_results['token_ids'], hf_results['token_ids'],
+                                                   auto_tokenizer, hf_tokenizer, context_size=5)
+                else:
+                    show_mismatch_context(auto_results['token_ids'], hf_results['token_ids'],
+                                        "AutoLinear", "HuggingFace")
+            else:
+                # Token IDs are the same, but show them for debugging decoding issues
+                print("   - Token IDs are identical")
+                print(f"   Sample token IDs: {auto_results['token_ids'][:10]}{'...' if len(auto_results['token_ids']) > 10 else ''}")
+                print(f"   Last token IDs: {auto_results['token_ids'][-10:] if len(auto_results['token_ids']) > 10 else auto_results['token_ids']}")
+
             if not comparison['decoded_match']:
                 print("   - Decoded text differs")
                 print(f"   AutoLinear decoded: {repr(auto_results['decoded_text'][:100])}")
@@ -284,11 +356,11 @@ def load_and_process_jsonl(file_path, tokenize_text=True, max_entries=0, verbose
                 if tokenize_text and auto_tokenizer and hf_tokenizer:
                     # Compare tokenization for prompt - fail fast on any tokenization errors
                     prompt_results = compare_tokenization_methods(auto_tokenizer, hf_tokenizer, prompt, f"prompt {processed_entries + 1}")
-                    prompt_analysis = analyze_tokenization_results(prompt_results, f"prompt {processed_entries + 1}", verbose=verbose)
+                    prompt_analysis = analyze_tokenization_results(prompt_results, f"prompt {processed_entries + 1}", verbose=verbose, auto_tokenizer=auto_tokenizer, hf_tokenizer=hf_tokenizer)
 
                     # Compare tokenization for completion - fail fast on any tokenization errors
                     completion_results = compare_tokenization_methods(auto_tokenizer, hf_tokenizer, completion, f"completion {processed_entries + 1}")
-                    completion_analysis = analyze_tokenization_results(completion_results, f"completion {processed_entries + 1}", verbose=verbose)
+                    completion_analysis = analyze_tokenization_results(completion_results, f"completion {processed_entries + 1}", verbose=verbose, auto_tokenizer=auto_tokenizer, hf_tokenizer=hf_tokenizer)
 
                     entry_has_mismatch = prompt_analysis['has_mismatch'] or completion_analysis['has_mismatch']
                     if entry_has_mismatch:
