@@ -158,9 +158,13 @@ fn fuse_hspace_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
             let next_first = next_token.chars().next();
             let next_starts_letter = starts_with_letters_indices(text, end_indices, i + 1);
             let next_starts_non_ascii_numeric = starts_with_non_ascii_numeric(next_token);
+            // For donation into non-ASCII numerics (e.g., ①, Ⅻ), require previous token to end with an alnum
+            // to avoid donating after punctuation like '#'.
+            let prev_is_alnum_last = if i == 0 { false } else { is_alnum_last_indices(text, end_indices, i - 1) };
 
             // CASE A: letters OR non-ASCII numerics (e.g., Ⅻ) -> donate one trailing hspace
-            if next_starts_letter || next_starts_non_ascii_numeric {
+            // For non-ASCII numerics, only donate if the previous token ends with alnum
+            if next_starts_letter || (next_starts_non_ascii_numeric && prev_is_alnum_last) {
                 if has_rest {
                     let split_pos = end_indices[i] - last_ch.len_utf8();
                     out.push(split_pos);
@@ -328,7 +332,10 @@ fn merge_trailing_quote_indices(text: &str, end_indices: &[usize], quote: char) 
 pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
     let initial = pretokenize_fast_single_pass_indices(text);
     let split_ws = split_mixed_whitespace_indices(text, &initial);
-    let fixed   = fix_contractions_indices(text, &split_ws);
+    // Extra pass: split runs of non-ASCII horizontal whitespace (e.g., U+2003 EM SPACE)
+    // into per-codepoint tokens, while preserving ASCII space/tab runs intact.
+    let split_non_ascii_ws = split_non_ascii_hspace_runs_indices(text, &split_ws);
+    let fixed   = fix_contractions_indices(text, &split_non_ascii_ws);
     let fused   = fuse_hspace_indices(text, &fixed);
     // Do NOT merge double quotes in indices mode to match slow tokenizer behavior
     let merged_single = merge_trailing_quote_indices(text, &fused, '\'');
@@ -376,6 +383,103 @@ fn split_mixed_whitespace_indices(text: &str, end_indices: &[usize]) -> Vec<usiz
             out.push(end);
         }
         prev_end = end;
+    }
+    out
+}
+
+/// Return true if char is horizontal whitespace excluding ASCII space and tab, and excluding newlines.
+fn is_non_ascii_hspace(c: char) -> bool {
+    c.is_whitespace() && c != ' ' && c != '\t' && c != '\n' && c != '\r'
+}
+
+fn is_thinish_space(c: char) -> bool {
+    matches!(c,
+        '\u{2009}' /* THIN SPACE */ |
+        '\u{200A}' /* HAIR SPACE */ |
+        '\u{202F}' /* NARROW NO-BREAK SPACE */ |
+        '\u{205F}' /* MEDIUM MATHEMATICAL SPACE */
+    )
+}
+
+/// New pass: split tokens that are composed entirely of non-ASCII horizontal whitespace
+/// (e.g., NBSP, EM SPACE U+2003) into per-codepoint tokens. Leave ASCII spaces/tabs intact.
+fn split_non_ascii_hspace_runs_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
+    // Coalesce consecutive tokens that are entirely non-ASCII horizontal whitespace
+    // into a single token. Leave ASCII space/tab runs and all other tokens intact.
+    if end_indices.is_empty() { return Vec::new(); }
+    let mut out: Vec<usize> = Vec::with_capacity(end_indices.len());
+    let mut i = 0usize;
+    let mut prev_end = 0usize;
+    while i < end_indices.len() {
+        let end = end_indices[i];
+        let tok = &text[prev_end..end];
+        let is_ws_no_nl = !tok.contains('\n') && !tok.contains('\r') && tok.chars().all(|c| c.is_whitespace());
+        let all_non_ascii_hspace = is_ws_no_nl && tok.chars().all(is_non_ascii_hspace);
+
+        if all_non_ascii_hspace {
+            // Extend through subsequent tokens that are also all non-ASCII hspace
+            let mut j = i + 1;
+            let mut last_end = end;
+            let run_start = prev_end;
+            let mut run_ends: Vec<usize> = vec![end];
+            while j < end_indices.len() {
+                let next_end = end_indices[j];
+                let next_tok = &text[last_end..next_end];
+                let is_ws_no_nl_next = !next_tok.contains('\n') && !next_tok.contains('\r')
+                    && next_tok.chars().all(|c| c.is_whitespace());
+                let all_non_ascii_next = is_ws_no_nl_next && next_tok.chars().all(is_non_ascii_hspace);
+                if all_non_ascii_next {
+                    last_end = next_end;
+                    run_ends.push(next_end);
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            // Decide how to represent this run according to slow tokenizer behavior
+            let run_slice = &text[run_start..last_end];
+            let mut uniq: Vec<char> = Vec::new();
+            for ch in run_slice.chars() {
+                if !uniq.contains(&ch) { uniq.push(ch); }
+                if uniq.len() > 8 { break; } // small cap; not expected to be large
+            }
+
+            if uniq.len() == 1 {
+                let ch = uniq[0];
+                if ch == '\u{2003}' { // EM SPACE: keep repeated EM SPACE as separate tokens
+                    let mut cur = run_start;
+                    for ch in run_slice.chars() {
+                        cur += ch.len_utf8();
+                        out.push(cur);
+                    }
+                } else if ch == '\u{00A0}' { // NBSP: coalesce repeated NBSP into one token
+                    out.push(last_end);
+                } else if is_thinish_space(ch) {
+                    // Thin-ish space repeated: coalesce
+                    out.push(last_end);
+                } else {
+                    // Default for other non-ASCII spaces: preserve original tokenization
+                    out.extend(run_ends.into_iter());
+                }
+            } else {
+                // Mixed different codepoints: coalesce only if all are thin-ish; otherwise preserve
+                let all_thin = run_slice.chars().all(is_thinish_space);
+                if all_thin {
+                    out.push(last_end);
+                } else {
+                    out.extend(run_ends.into_iter());
+                }
+            }
+            // Advance i and prev_end
+            i = j;
+            prev_end = last_end;
+            continue;
+        }
+
+        // Default: keep token as-is
+        out.push(end);
+        prev_end = end;
+        i += 1;
     }
     out
 }
