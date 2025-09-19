@@ -191,6 +191,25 @@ def show_token_mismatch_with_decoded(auto_token_ids, hf_token_ids, auto_tokenize
         print(f"   Mismatch at position {mismatch_pos}: {auto_context_ids[pointer_pos]} vs {hf_context_ids[pointer_pos]}")
         print(f"   Decoded mismatch: {repr(auto_context_decoded[pointer_pos])} vs {repr(hf_context_decoded[pointer_pos])}")
 
+    # Calculate and show mismatch percentage
+    min_len = min(len(auto_token_ids), len(hf_token_ids))
+    max_len = max(len(auto_token_ids), len(hf_token_ids))
+
+    # Count mismatches in the overlapping portion
+    mismatches = 0
+    for i in range(min_len):
+        if auto_token_ids[i] != hf_token_ids[i]:
+            mismatches += 1
+
+    # Add length difference as mismatches
+    length_diff = abs(len(auto_token_ids) - len(hf_token_ids))
+    total_mismatches = mismatches + length_diff
+
+    # Calculate percentage based on the longer sequence
+    mismatch_percentage = (total_mismatches / max_len) * 100 if max_len > 0 else 0
+
+    print(f"   Mismatch percentage: {mismatch_percentage:.2f}% ({total_mismatches}/{max_len} tokens)")
+
 
 def analyze_tokenization_results(results, text_name="text", verbose=False, auto_tokenizer=None, hf_tokenizer=None):
     """
