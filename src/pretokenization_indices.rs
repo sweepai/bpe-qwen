@@ -151,7 +151,8 @@ fn fuse_hspace_indices(text: &str, end_indices: &[usize]) -> Vec<usize> {
         if is_ws_no_nl && i + 1 < end_indices.len() {
             let next_token = get_token_at_index(text, end_indices, i + 1);
             let last_ch = cur_token.chars().last().unwrap_or('\0');
-            let has_rest = cur_token.len() > 1;
+            // Important: determine if there is more than one character, not bytes.
+            let has_rest = cur_token.chars().count() > 1;
 
             // Helper variables for next token analysis
             let next_first = next_token.chars().next();
