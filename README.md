@@ -13,16 +13,8 @@ A blazing-fast BPE tokenizer for Qwen models, built with Rust and the [rust-gems
 
 ## Installation
 
-### From Source
-
 ```bash
-# Clone the repository
-git clone https://github.com/sweepai/bpe-qwen.git
-cd bpe-qwen
-
-# Install with maturin (requires Rust toolchain)
-pip install maturin
-maturin develop --release
+pip install bpe-qwen
 ```
 
 ## Usage
