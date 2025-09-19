@@ -330,9 +330,9 @@ pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
     let split_ws = split_mixed_whitespace_indices(text, &initial);
     let fixed   = fix_contractions_indices(text, &split_ws);
     let fused   = fuse_hspace_indices(text, &fixed);
-    let merged1 = merge_trailing_quote_indices(text, &fused, '"');
-    let merged2 = merge_trailing_quote_indices(text, &merged1, '\'');
-    merged2
+    // Do NOT merge double quotes in indices mode to match slow tokenizer behavior
+    let merged_single = merge_trailing_quote_indices(text, &fused, '\'');
+    merged_single
 }
 
 /// Split any whitespace-only token that contains mixed types of horizontal whitespace
