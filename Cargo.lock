@@ -64,17 +64,14 @@ dependencies = [
 
 [[package]]
 name = "bpe-qwen"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
- "base64",
  "bpe",
  "ctor",
  "fancy-regex",
- "fnv",
  "pyo3",
  "rayon",
  "regex",
- "serde",
  "serde_json",
  "unicode-normalization",
 ]
