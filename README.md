@@ -1,13 +1,13 @@
 # bpe-qwen
 
-A blazing-fast BPE tokenizer for Qwen models, built with Rust and the [rust-gems BPE crate](https://github.com/github/rust-gems/tree/main/crates/bpe). Achieves **5x faster** tokenization with parallelism compared to HuggingFace tokenizers.
+A blazing-fast BPE tokenizer for Qwen models, built with Rust and the [rust-gems BPE crate](https://github.com/github/rust-gems/tree/main/crates/bpe). Achieves **5x faster** tokenization by default and **10x faster** with parallelization compared to HuggingFace tokenizers.
 
 ## Features
 
 - 🚀 **Linear-time tokenization** using optimized Rust implementation
 - 🐍 **Python bindings** via PyO3 for seamless integration
 - 📦 **Native BPE format support** (vocab.json + merges.txt)
-- ⚡ **5x faster encoding** with parallelism and **2x faster decoding** compared to HuggingFace
+- ⚡ **5x faster encoding** by default, **10x faster** with parallelism, and **2x faster decoding** compared to HuggingFace
 - 🎯 **Pretokenization support** for Qwen's pretokenization pattern
 - ✅ **100% accuracy verified** across comprehensive test suite, including special tokens
 
