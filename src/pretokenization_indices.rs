@@ -60,10 +60,6 @@ fn starts_with_letters_indices(text: &str, end_indices: &[usize], index: usize) 
     text[start..end].chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
 }
 
-fn starts_with_ascii_digit(s: &str) -> bool {
-    s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
-}
-
 fn starts_with_non_ascii_numeric(s: &str) -> bool {
     s.chars().next().map(|c| c.is_numeric() && !c.is_ascii_digit()).unwrap_or(false)
 }
