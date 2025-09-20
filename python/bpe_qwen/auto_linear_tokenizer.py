@@ -217,9 +217,9 @@ class QwenLinearTokenizer:
             input_ids = self.encode(text, add_special_tokens=add_special_tokens,
                                    padding=padding, truncation=truncation,
                                    max_length=max_length)
-            if not isinstance(input_ids[0], list):
-                input_ids = [input_ids]
-            attention_masks = [[1] * len(input_ids[0])]
+            # For single string input, return list[int] to match HuggingFace behavior
+            # Don't wrap in another list like we do for batch processing
+            attention_masks = [1] * len(input_ids)
 
         # Build result dictionary
         result = {'input_ids': input_ids}

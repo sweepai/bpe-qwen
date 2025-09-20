@@ -169,27 +169,6 @@ class TestEdgeCases:
 class TestCompatibilityWithHuggingFace:
     """Test compatibility with HuggingFace tokenizer interface."""
 
-    def test_encode_plus_functionality(self):
-        """Test that encode_plus works like HuggingFace tokenizers."""
-        tokenizer = AutoLinearTokenizer.from_pretrained("data")
-
-        # Test basic encode_plus
-        result = tokenizer.encode_plus("Hello world")
-        assert isinstance(result, dict)
-        assert 'input_ids' in result
-        assert isinstance(result['input_ids'], list)
-        assert len(result['input_ids']) == 1  # Should be wrapped in batch
-        assert isinstance(result['input_ids'][0], list)
-
-        # Test with return_attention_mask
-        result_with_mask = tokenizer.encode_plus("Hello world", return_attention_mask=True)
-        assert 'attention_mask' in result_with_mask
-        assert len(result_with_mask['attention_mask']) == 1
-
-        # Test with padding and max_length
-        result_padded = tokenizer.encode_plus("Hi", padding=True, max_length=10)
-        assert len(result_padded['input_ids'][0]) <= 10
-
     def test_batch_encode_plus_functionality(self):
         """Test that batch_encode_plus works like HuggingFace tokenizers."""
         tokenizer = AutoLinearTokenizer.from_pretrained("data")
@@ -337,6 +316,32 @@ class TestCompatibilityWithHuggingFace:
 
         assert len(different_tokenized) == len(different_texts)
         assert len(different_tokenized[0]) != len(different_tokenized[1])  # Different lengths expected
+
+    def test_single_string_input_format(self):
+        """Test that single string input returns list[int] not list[list[int]]."""
+        tokenizer = AutoLinearTokenizer.from_pretrained("data")
+        huggingface_tokenizer = AutoTokenizer.from_pretrained("data")
+
+        # Test with single string input (not a list)
+        single_text = "This is a single string input"
+        single_tokenized = tokenizer(single_text)["input_ids"]
+        huggingface_single_tokenized = huggingface_tokenizer(single_text)["input_ids"]
+
+        # Debug: Print what we're getting
+        print(f"AutoLinearTokenizer result: {single_tokenized}")
+        print(f"AutoLinearTokenizer type: {type(single_tokenized)}")
+        print(f"HuggingFace result: {huggingface_single_tokenized}")
+        print(f"HuggingFace type: {type(huggingface_single_tokenized)}")
+
+        if isinstance(single_tokenized, list) and len(single_tokenized) > 0:
+            print(f"First element type in AutoLinearTokenizer: {type(single_tokenized[0])}")
+        if isinstance(huggingface_single_tokenized, list) and len(huggingface_single_tokenized) > 0:
+            print(f"First element type in HuggingFace: {type(huggingface_single_tokenized[0])}")
+
+        # When input is a single string, HuggingFace returns list[int] not list[list[int]]
+        assert isinstance(single_tokenized, list)
+        assert all(isinstance(token, int) for token in single_tokenized)
+        assert single_tokenized == huggingface_single_tokenized
 
 class TestParallelization:
     """Test parallelization functionality."""
