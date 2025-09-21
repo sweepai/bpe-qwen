@@ -4,11 +4,11 @@ A blazing-fast BPE tokenizer for Qwen models, built with Rust and the [rust-gems
 
 ## Features
 
-- 🚀 **Linear-time tokenization** using optimized Rust implementation
+- 🚀 **Linear-time tokenization** based on the rust-gems BPE crate for fast tokenization
+- 🎯 **Optimized pretokenization** for Qwen's pretokenization pattern using a two-pass approach instead of the base lookahead regex
 - 🐍 **Python bindings** via PyO3 for seamless integration
 - 📦 **Native BPE format support** (vocab.json + merges.txt)
 - ⚡ **5x faster encoding** by default, **10x faster** with parallelism, and **2x faster decoding** compared to HuggingFace
-- 🎯 **Pretokenization support** for Qwen's pretokenization pattern
 - ✅ **100% accuracy verified** across comprehensive test suite, including special tokens
 
 ## Installation
@@ -84,29 +84,16 @@ python test_simple.py
 python benchmark.py
 ```
 
-### Running Benchmarks
-
-```bash
-# Run comprehensive benchmarks
-python benchmark.py
-
-# Compare against HuggingFace
-# (automatically downloads HF tokenizer if needed)
-```
-
 ## Limitations
 
-- Currently supports Qwen models with GPT-2 style byte-level BPE
 - Requires vocab.json and merges.txt files (not tokenizer.json)
-- Some special tokens may need manual configuration
+- Some multi-byte UTF-8 characters are not handled correctly
 
 ## Future Improvements
 
 ### Potential Optimizations
-- [ ] **Rayon parallelization**: Multi-threaded tokenization for large texts using data parallelism
 - [ ] **True SIMD intrinsics**: Explicit vector instructions for even faster ASCII detection and token processing
 - [ ] **Custom allocators**: Specialized memory management for tokenization workloads
-- [ ] **Profile-guided optimization**: Workload-specific optimizations based on production usage patterns
 
 ### Feature Enhancements
 - [ ] Early stopping for tokenization based on token count
