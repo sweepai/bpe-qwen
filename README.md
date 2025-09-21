@@ -49,44 +49,22 @@ batch = tokenizer(
 
 ## Benchmark Results
 
-Performance comparison with HuggingFace tokenizers on various text samples:
+Performance comparison with HuggingFace tokenizers on WikiText dataset (2,891 texts, 1.3M characters):
 
-| Metric | bpe-qwen (Rust) | HuggingFace | Speedup |
-|--------|-----------------|-------------|---------|
-| **Encoding Speed** | 19.22M chars/sec | 3.35M chars/sec | **5.73x** |
-| **Decoding Speed** | 12.34M tokens/sec | 5.33M tokens/sec | **2.32x** |
-| **Load Time** | ~3.3 seconds | ~2.0 seconds | 1.65x |
+### Sequential Performance:
+| Tokenizer | Speed | Speedup vs HF |
+|-----------|-------|---------------|
+| **bpe-qwen** | **5.01M tokens/sec** | **4.63x** |
+| HuggingFace | 1.08M tokens/sec | 1.00x |
 
-## Technical Implementation
+### Parallel Performance (8 workers):
+| Tokenizer | Speed | Speedup vs HF | Parallel Benefit |
+|-----------|-------|---------------|------------------|
+| **bpe-qwen** | **24.31M tokens/sec** | **9.16x** | **4.85x vs sequential** |
+| HuggingFace | 2.65M tokens/sec | 1.00x | 2.46x vs sequential |
 
-### Performance Optimization Journey
+✅ **Token consistency verified**: All methods produce identical 298,938 tokens
 
-We systematically optimized the tokenizer through multiple iterations with significant performance improvements:
-
-#### Core Optimizations
-1. **HashMap → Vec mapping**: Replaced `HashMap<u32, u32>` with `Vec<u32>` for O(1) token ID mapping
-2. **ASCII normalization skip**: Fast-path ASCII text to skip Unicode normalization
-3. **Vector pre-allocation**: Optimal 128-token capacity reduces reallocation overhead
-
-#### Advanced Optimizations
-4. **SIMD ASCII detection**: Process 8 bytes at once using u64 chunks instead of byte-by-byte checks
-5. **Memory pool**: Reuse `Vec<u32>` allocations between tokenization calls to reduce allocation pressure
-6. **True SIMD intrinsics**: NEON on ARM, SSE2 on x86_64 for 16-byte parallel processing
-7. **Zero-copy strings**: Use `Cow<str>` to avoid allocations for ASCII text and when normalization not needed
-
-#### Experiment Results Table
-| Optimization | Encoding Speed | Encoding vs HF | Decoding Speed | Decoding vs HF | Status |
-|-------------|---------------|----------------|----------------|----------------|---------|
-| Baseline | 5.36M tok/s | 6.39x | 11.47M tok/s | 2.22x | ✅ Kept |
-| + SIMD ASCII | 5.57M tok/s | 6.87x | - | - | ✅ Kept |
-| + Memory Pool | 5.85M tok/s | 7.30x | 11.47M tok/s | 2.22x | ✅ Kept |
-| + String Interning | 6.05M tok/s | 7.72x | 7.55M tok/s | 1.38x | ❌ Reverted |
-| - String Interning | 5.93M tok/s | 6.99x | 11.39M tok/s | 2.12x | ✅ Kept |
-| + True SIMD | 6.12M tok/s | 7.28x | 12.04M tok/s | 2.21x | ✅ Kept |
-| + Batch API | 6.06M tok/s | 7.50x | 12.04M tok/s | 2.32x | ❌ Reverted |
-| + Zero-Copy | 6.30M tok/s | 7.83x | 12.34M tok/s | 2.32x | ✅ Kept |
-| + Jemalloc | 5.70M tok/s | 8.91x | 11.01M tok/s | 2.19x | ❌ Reverted |
-| + **Parallel Batch (8 workers)** | **31.43M tok/s** | **18.13x*** | - | - | ✅ Kept |
 
 ## Development
 
