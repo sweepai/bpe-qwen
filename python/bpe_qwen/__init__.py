@@ -10,6 +10,8 @@ QwenTokenizer = bpe_qwen.QwenTokenizer
 pretokenize_slow = bpe_qwen.pretokenize_slow
 pretokenize_fast = bpe_qwen.pretokenize_fast
 pretokenize_fast_indices = bpe_qwen.pretokenize_fast_indices
+pretokenize_fast_single_pass_indices = bpe_qwen.pretokenize_fast_single_pass_indices
+pretokenize_fast_single_pass_indices_automaton = bpe_qwen.pretokenize_fast_single_pass_indices_automaton
 indices_to_strings = bpe_qwen.indices_to_strings
 
 __doc__ = getattr(bpe_qwen, '__doc__', '')
@@ -17,9 +19,11 @@ if hasattr(bpe_qwen, "__all__"):
     __all__ = bpe_qwen.__all__ + ["patch_transformers", "unpatch_transformers", "QwenTokenizerFast",
                                    "AutoLinearTokenizer", "QwenLinearTokenizer", "get_tokenizer",
                                    "pretokenize_slow", "pretokenize_fast", "pretokenize_fast_indices",
+                                   "pretokenize_fast_single_pass_indices", "pretokenize_fast_single_pass_indices_automaton",
                                    "indices_to_strings", "pretokenize_automata"]
 else:
     __all__ = ["QwenTokenizer", "patch_transformers", "unpatch_transformers", "QwenTokenizerFast",
                "AutoLinearTokenizer", "QwenLinearTokenizer", "get_tokenizer",
                "pretokenize_slow", "pretokenize_fast", "pretokenize_fast_indices",
+               "pretokenize_fast_single_pass_indices", "pretokenize_fast_single_pass_indices_automaton",
                "indices_to_strings"]

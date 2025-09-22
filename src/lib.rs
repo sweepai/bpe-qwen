@@ -876,6 +876,18 @@ fn pretokenize_fast_indices(text: &str) -> PyResult<Vec<usize>> {
     Ok(pretokenization_indices::pretokenize_fast_indices(text))
 }
 
+/// Expose the single-pass indices-based pretokenization (returns end positions only)
+#[pyfunction]
+fn pretokenize_fast_single_pass_indices(text: &str) -> PyResult<Vec<usize>> {
+    Ok(pretokenization_indices::pretokenize_fast_single_pass_indices(text))
+}
+
+/// Expose the single-pass automaton indices-based pretokenization (returns end positions only)
+#[pyfunction]
+fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> PyResult<Vec<usize>> {
+    Ok(pretokenization_indices::pretokenize_fast_single_pass_indices_automaton(text))
+}
+
 /// Convert end indices to strings for testing
 #[pyfunction]
 fn indices_to_strings(text: &str, end_indices: Vec<usize>) -> PyResult<Vec<String>> {
@@ -889,6 +901,8 @@ fn bpe_qwen(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pretokenize_slow, m)?)?;
     m.add_function(wrap_pyfunction!(pretokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(pretokenize_fast_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(pretokenize_fast_single_pass_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(pretokenize_fast_single_pass_indices_automaton, m)?)?;
     m.add_function(wrap_pyfunction!(indices_to_strings, m)?)?;
     Ok(())
 }

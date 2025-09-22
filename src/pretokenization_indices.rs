@@ -1,7 +1,327 @@
 use crate::pretokenization::GLOBAL_QWEN_FAST_REGEX;
+use crate::pretokenization::QWEN_PATTERN_FAST;
+
+/// Determine if a character is horizontal whitespace excluding CR and LF
+#[inline]
+fn is_hspace_no_crlf(c: char) -> bool {
+    c.is_whitespace() && c != '\r' && c != '\n'
+}
+
+/// Punctuation for our purposes: not whitespace and not alphanumeric
+#[inline]
+fn is_punct(c: char) -> bool { !c.is_whitespace() && !c.is_alphanumeric() }
+
+/// Case-insensitive check for a contraction token starting at byte position `pos`.
+/// Matches one of: 's, 't, 'm, 'd, 're, 've, 'll (ASCII-insensitive)
+#[inline]
+fn contraction_len(bytes: &[u8], pos: usize) -> Option<usize> {
+    if pos >= bytes.len() || bytes[pos] != b'\'' { return None; }
+    let b1 = bytes.get(pos + 1).copied();
+    let b2 = bytes.get(pos + 2).copied();
+    match (b1, b2) {
+        // 2-byte contractions
+        (Some(b), _) if matches!(b | 0x20, b's' | b't' | b'm' | b'd') => Some(2),
+        // 3-byte: re, ve, ll
+        (Some(b1), Some(b2)) => {
+            let c1 = b1 | 0x20; let c2 = b2 | 0x20;
+            if (c1 == b'r' && c2 == b'e') || (c1 == b'v' && c2 == b'e') || (c1 == b'l' && c2 == b'l') {
+                Some(3)
+            } else { None }
+        }
+        _ => None,
+    }
+}
+
+#[inline]
+fn next_char_at(s: &str, pos: usize) -> Option<(char, usize)> {
+    s.get(pos..).and_then(|tail| tail.chars().next().map(|ch| {
+        let w = ch.len_utf8();
+        (ch, pos + w)
+    }))
+}
+
+/// New: automaton implementation of QWEN_PATTERN_FAST that returns end indices only
+pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> {
+    let mut ends: Vec<usize> = Vec::with_capacity(text.len() / 4 + 8);
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut pos: usize = 0;
+
+    while pos < len {
+        // 1) Contractions: (?i:'s|'t|'re|'ve|'m|'ll|'d)
+        if let Some(clen) = contraction_len(bytes, pos) {
+            ends.push(pos + clen);
+            pos += clen;
+            continue;
+        }
+
+        // Current character
+        let (ch, next_pos1) = match next_char_at(text, pos) { Some(t) => t, None => break };
+
+        // 2) [^\S\r\n]\p{L}+  (one hspace-not-CRLF + letters)
+        if is_hspace_no_crlf(ch) {
+            if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
+                if nch.is_alphabetic() {
+                    while j < len {
+                        if let Some((c2, j2)) = next_char_at(text, j) {
+                            if c2.is_alphabetic() { j = j2; } else { break; }
+                        } else { break; }
+                    }
+                    ends.push(j);
+                    pos = j;
+                    continue;
+                }
+            }
+        }
+
+        // 3) [^\s\p{L}\p{N}]?\p{L}+
+        if ch.is_alphabetic() {
+            let mut j = next_pos1;
+            while j < len {
+                if let Some((c2, j2)) = next_char_at(text, j) {
+                    if c2.is_alphabetic() { j = j2; } else { break; }
+                } else { break; }
+            }
+            ends.push(j);
+            pos = j;
+            continue;
+        } else if is_punct(ch) {
+            if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
+                if nch.is_alphabetic() {
+                    while j < len {
+                        if let Some((c2, j2)) = next_char_at(text, j) {
+                            if c2.is_alphabetic() { j = j2; } else { break; }
+                        } else { break; }
+                    }
+                    ends.push(j);
+                    pos = j;
+                    continue;
+                }
+            }
+        }
+
+        // 4) \p{N}  (single numeric codepoint)
+        if ch.is_numeric() {
+            ends.push(next_pos1);
+            pos = next_pos1;
+            continue;
+        }
+
+        // 5)  ?[^\s\p{L}\p{N}]+[\r\n]*
+        if ch == ' ' {
+            if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
+                if !nch.is_whitespace() && !nch.is_alphanumeric() {
+                    while j < len {
+                        if let Some((c2, j2)) = next_char_at(text, j) {
+                            if !c2.is_whitespace() && !c2.is_alphanumeric() { j = j2; } else { break; }
+                        } else { break; }
+                    }
+                    while j < len {
+                        if let Some((c2, j2)) = next_char_at(text, j) {
+                            if c2 == '\r' || c2 == '\n' { j = j2; } else { break; }
+                        } else { break; }
+                    }
+                    ends.push(j);
+                    pos = j;
+                    continue;
+                }
+            }
+        }
+        if is_punct(ch) {
+            let mut j = next_pos1;
+            while j < len {
+                if let Some((c2, j2)) = next_char_at(text, j) {
+                    if !c2.is_whitespace() && !c2.is_alphanumeric() { j = j2; } else { break; }
+                } else { break; }
+            }
+            while j < len {
+                if let Some((c2, j2)) = next_char_at(text, j) {
+                    if c2 == '\r' || c2 == '\n' { j = j2; } else { break; }
+                } else { break; }
+            }
+            ends.push(j);
+            pos = j;
+            continue;
+        }
+
+        // 6) \s*[\r\n]+ - zero or more whitespace followed by one or more newlines
+        if ch == '\r' || ch == '\n' {
+            let mut j = pos;
+
+            // This implements the full \s*[\r\n]+ pattern
+            // The pattern is: zero or more whitespace, then one or more newlines
+            // We need to handle sequences like "\n    \n" as a single token
+            // But NOT consume trailing whitespace that doesn't lead to newlines
+
+            // First consume initial newlines
+            while j < len {
+                if let Some((c2, j2)) = next_char_at(text, j) {
+                    if c2 == '\r' || c2 == '\n' {
+                        j = j2;
+                    } else {
+                        break;
+                    }
+                } else { break; }
+            }
+
+            // Now look for the pattern: whitespace followed by more newlines
+            // This handles cases like "\n    \n" where we want the whole thing as one token
+            loop {
+                let whitespace_start = j;
+                // Consume whitespace (not CR/LF)
+                while j < len {
+                    if let Some((c2, j2)) = next_char_at(text, j) {
+                        if c2.is_whitespace() && c2 != '\r' && c2 != '\n' {
+                            j = j2;
+                        } else {
+                            break;
+                        }
+                    } else { break; }
+                }
+
+                // Check if we have newlines after the whitespace
+                let newline_start = j;
+                while j < len {
+                    if let Some((c2, j2)) = next_char_at(text, j) {
+                        if c2 == '\r' || c2 == '\n' {
+                            j = j2;
+                        } else {
+                            break;
+                        }
+                    } else { break; }
+                }
+
+                // If we didn't find any newlines after the whitespace, backtrack
+                if j == newline_start {
+                    j = whitespace_start;
+                    break;
+                }
+                // Otherwise continue the loop to look for more whitespace+newlines
+            }
+
+            ends.push(j);
+            pos = j;
+            continue;
+        }
+
+        // Check for whitespace that precedes newlines (part of \s*[\r\n]+ pattern)
+        if ch.is_whitespace() && ch != '\r' && ch != '\n' {
+            // Look ahead to see if this whitespace run leads to a newline
+            let mut j = pos;
+            let mut found_newline = false;
+
+            // Scan ahead through whitespace to see if we hit a newline
+            while j < len {
+                if let Some((c2, j2)) = next_char_at(text, j) {
+                    if c2.is_whitespace() && c2 != '\r' && c2 != '\n' {
+                        j = j2;
+                    } else if c2 == '\r' || c2 == '\n' {
+                        found_newline = true;
+                        break;
+                    } else {
+                        break;
+                    }
+                } else { break; }
+            }
+
+            if found_newline {
+                // This is whitespace that precedes newlines - consume as \s*[\r\n]+
+                // Use the same logic as the newline-first case
+                j = pos; // Reset to start of whitespace
+
+                // Consume all the initial whitespace
+                while j < len {
+                    if let Some((c2, j2)) = next_char_at(text, j) {
+                        if c2.is_whitespace() && c2 != '\r' && c2 != '\n' {
+                            j = j2;
+                        } else {
+                            break;
+                        }
+                    } else { break; }
+                }
+
+                // Now look for the pattern: newlines followed by more whitespace+newlines
+                loop {
+                    // Consume newlines
+                    let newline_start = j;
+                    while j < len {
+                        if let Some((c2, j2)) = next_char_at(text, j) {
+                            if c2 == '\r' || c2 == '\n' {
+                                j = j2;
+                            } else {
+                                break;
+                            }
+                        } else { break; }
+                    }
+
+                    // If we didn't consume any newlines, we're done
+                    if j == newline_start {
+                        break;
+                    }
+
+                    // Now consume any whitespace (not CR/LF)
+                    let whitespace_start = j;
+                    while j < len {
+                        if let Some((c2, j2)) = next_char_at(text, j) {
+                            if c2.is_whitespace() && c2 != '\r' && c2 != '\n' {
+                                j = j2;
+                            } else {
+                                break;
+                            }
+                        } else { break; }
+                    }
+
+                    // Check if we have newlines after the whitespace
+                    let peek_j = j;
+                    let mut has_more_newlines = false;
+                    let peek_pos = peek_j;
+                    while peek_pos < len {
+                        if let Some((c2, _)) = next_char_at(text, peek_pos) {
+                            if c2 == '\r' || c2 == '\n' {
+                                has_more_newlines = true;
+                                break;
+                            } else {
+                                break;
+                            }
+                        } else { break; }
+                    }
+
+                    // If no more newlines after this whitespace, backtrack and stop
+                    if !has_more_newlines {
+                        j = whitespace_start;
+                        break;
+                    }
+                    // Otherwise continue the loop to consume more newlines
+                }
+                ends.push(j);
+                pos = j;
+                continue;
+            }
+        }
+
+        // 7/8) \s+ (and \s+\z) for non-CR/LF whitespace runs
+        if ch.is_whitespace() && ch != '\r' && ch != '\n' {
+            let mut j = next_pos1;
+            while j < len {
+                if let Some((c2, j2)) = next_char_at(text, j) {
+                    if c2.is_whitespace() && c2 != '\r' && c2 != '\n' { j = j2; } else { break; }
+                } else { break; }
+            }
+            ends.push(j);
+            pos = j;
+            continue;
+        }
+
+        // Safety net: consume current char as a token to avoid infinite loops
+        ends.push(next_pos1);
+        pos = next_pos1;
+    }
+
+    ends
+}
 
 /// Single-pass fast implementation using \z anchor instead of lookahead (indices version)
-fn pretokenize_fast_single_pass_indices(text: &str) -> Vec<usize> {
+pub fn pretokenize_fast_single_pass_indices(text: &str) -> Vec<usize> {
     GLOBAL_QWEN_FAST_REGEX.get()
         .expect("Global fast regex not initialized")
         .find_iter(text)
@@ -618,6 +938,89 @@ mod tests {
         let indices = pretokenize_fast_indices(text);
         let strings = indices_to_strings(text, &indices);
         assert_eq!(strings, vec!["\t", "\t", "1", "0"]);
+    }
+
+    #[test]
+    fn test_debug_specific_failing_case() {
+        let text = "    \n    \n";
+        let re = regex::Regex::new(crate::pretokenization::QWEN_PATTERN_FAST).unwrap();
+
+        println!("Text: {:?}", text);
+        println!("Text bytes: {:?}", text.as_bytes());
+
+        let expected: Vec<usize> = re.find_iter(text).map(|m| m.end()).collect();
+        let actual = pretokenize_fast_single_pass_indices_automaton(text);
+
+        println!("Expected: {:?}", expected);
+        println!("Actual:   {:?}", actual);
+
+        // Print the tokens for debugging
+        let expected_tokens: Vec<&str> = {
+            let mut tokens = Vec::new();
+            let mut start = 0;
+            for &end in &expected {
+                tokens.push(&text[start..end]);
+                start = end;
+            }
+            tokens
+        };
+
+        let actual_tokens: Vec<&str> = {
+            let mut tokens = Vec::new();
+            let mut start = 0;
+            for &end in &actual {
+                tokens.push(&text[start..end]);
+                start = end;
+            }
+            tokens
+        };
+
+        println!("Expected tokens: {:?}", expected_tokens);
+        println!("Actual tokens:   {:?}", actual_tokens);
+
+        // Find the first difference
+        for (i, (&exp, &act)) in expected.iter().zip(actual.iter()).enumerate() {
+            if exp != act {
+                println!("First difference at index {}: expected {}, got {}", i, exp, act);
+                break;
+            }
+        }
+
+        assert_eq!(actual, expected, "mismatch for {:?}", text);
+    }
+
+    #[test]
+    fn test_automaton_single_pass_matches_regex_on_samples() {
+        let samples = vec![
+            "Hello, world!",
+            "I've got 2 apples",
+            "  tabs\tand spaces",
+            "line1\r\nline2\nline3\rline4",
+            " @NotNull <Select .filter \"target",
+            "'re 've 'm 'll 'd 's 't",
+            "中文 空格 test",
+            " \u{00A0}\u{2003}mix",
+            // Add some failing cases from the SFT test
+            "formatType) {\n          case 'PQ':\n            \n            types.push({ type: '128k', size })\n     ",
+            "\n  // shallow clone\n  ret.memo = memo.slice()\n  \n\n  return (cache[index] = ret)\n}\n\nexport function i",
+            " test_sport_with_ancient_and_unusual_allowed\n    \n  end\n\n  def test_summer_olympics\n    assert @test",
+            "\n      this.reloadAt = new AtomicLong();\n   }\n   \n   public int getTotalConnections()\n   {\n      if ",
+            "space\")\npublic class NamespaceControllerV2 {\n    \n    private final NamespaceOperationService namesp",
+            // Specific whitespace patterns that were failing
+            "    \n    \n",
+            "        \n        \n",
+            " \n    \n",
+            "d:\n    \n  ",
+            "        \n",
+            " \n",
+        ];
+
+        let re = regex::Regex::new(crate::pretokenization::QWEN_PATTERN_FAST).unwrap();
+        for text in samples {
+            let expected: Vec<usize> = re.find_iter(text).map(|m| m.end()).collect();
+            let actual = pretokenize_fast_single_pass_indices_automaton(text);
+            assert_eq!(actual, expected, "mismatch for {:?}\nexpected: {:?}\nactual:   {:?}", text, expected, actual);
+        }
     }
 
     #[test]
