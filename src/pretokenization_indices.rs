@@ -1,5 +1,7 @@
 use crate::pretokenization::GLOBAL_QWEN_FAST_REGEX;
 use crate::pretokenization::QWEN_PATTERN_FAST;
+use regex::Regex;
+use std::sync::OnceLock;
 
 /// Determine if a character is horizontal whitespace excluding CR and LF
 #[inline]
@@ -9,7 +11,16 @@ fn is_hspace_no_crlf(c: char) -> bool {
 
 /// Punctuation for our purposes: not whitespace and not alphanumeric
 #[inline]
-fn is_punct(c: char) -> bool { !c.is_whitespace() && !c.is_alphanumeric() }
+fn is_punct(c: char) -> bool { !c.is_whitespace() && !is_letter(c) && !c.is_numeric() }
+
+#[inline]
+fn is_letter(c: char) -> bool {
+    // Exact match for Unicode general category \p{L}
+    static LETTER_RE: OnceLock<Regex> = OnceLock::new();
+    let re = LETTER_RE.get_or_init(|| Regex::new(r"^\p{L}$").expect("compile letter regex"));
+    let mut buf = [0u8; 4];
+    re.is_match(c.encode_utf8(&mut buf))
+}
 
 /// Case-insensitive check for a contraction token starting at byte position `pos`.
 /// Matches one of: 's, 't, 'm, 'd, 're, 've, 'll (ASCII-insensitive)
@@ -61,10 +72,10 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         // 2) [^\S\r\n]\p{L}+  (one hspace-not-CRLF + letters)
         if is_hspace_no_crlf(ch) {
             if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if nch.is_alphabetic() {
+                if is_letter(nch) {
                     while j < len {
                         if let Some((c2, j2)) = next_char_at(text, j) {
-                            if c2.is_alphabetic() { j = j2; } else { break; }
+                            if is_letter(c2) { j = j2; } else { break; }
                         } else { break; }
                     }
                     ends.push(j);
@@ -75,11 +86,11 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         }
 
         // 3) [^\s\p{L}\p{N}]?\p{L}+
-        if ch.is_alphabetic() {
+        if is_letter(ch) {
             let mut j = next_pos1;
             while j < len {
                 if let Some((c2, j2)) = next_char_at(text, j) {
-                    if c2.is_alphabetic() { j = j2; } else { break; }
+                    if is_letter(c2) { j = j2; } else { break; }
                 } else { break; }
             }
             ends.push(j);
@@ -87,10 +98,10 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
             continue;
         } else if is_punct(ch) {
             if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if nch.is_alphabetic() {
+                if is_letter(nch) {
                     while j < len {
                         if let Some((c2, j2)) = next_char_at(text, j) {
-                            if c2.is_alphabetic() { j = j2; } else { break; }
+                            if is_letter(c2) { j = j2; } else { break; }
                         } else { break; }
                     }
                     ends.push(j);
@@ -110,10 +121,10 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         // 5)  ?[^\s\p{L}\p{N}]+[\r\n]*
         if ch == ' ' {
             if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if !nch.is_whitespace() && !nch.is_alphanumeric() {
+                if !nch.is_whitespace() && !is_letter(nch) && !nch.is_numeric() {
                     while j < len {
                         if let Some((c2, j2)) = next_char_at(text, j) {
-                            if !c2.is_whitespace() && !c2.is_alphanumeric() { j = j2; } else { break; }
+                            if !c2.is_whitespace() && !is_letter(c2) && !c2.is_numeric() { j = j2; } else { break; }
                         } else { break; }
                     }
                     while j < len {
@@ -131,7 +142,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
             let mut j = next_pos1;
             while j < len {
                 if let Some((c2, j2)) = next_char_at(text, j) {
-                    if !c2.is_whitespace() && !c2.is_alphanumeric() { j = j2; } else { break; }
+                    if !c2.is_whitespace() && !is_letter(c2) && !c2.is_numeric() { j = j2; } else { break; }
                 } else { break; }
             }
             while j < len {
@@ -377,7 +388,7 @@ fn starts_with_letters_indices(text: &str, end_indices: &[usize], index: usize) 
     if start >= end { return false; }
 
     // Use bounded slice for robustness
-    text[start..end].chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
+    text[start..end].chars().next().map(|c| is_letter(c)).unwrap_or(false)
 }
 
 fn starts_with_non_ascii_numeric(s: &str) -> bool {
@@ -391,14 +402,14 @@ fn split_punct_letters(token: &str) -> Option<(&str, &str)> {
     let first_char = chars.next()?;
 
     // Check if first character is punctuation (not whitespace, not alphanumeric)
-    if first_char.is_whitespace() || first_char.is_alphanumeric() {
+    if first_char.is_whitespace() || is_letter(first_char) || first_char.is_numeric() {
         return None;
     }
 
     let rest = chars.as_str();
 
     // Check if the rest starts with letters
-    if rest.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+    if rest.chars().next().map(|c| is_letter(c)).unwrap_or(false) {
         let punct_len = first_char.len_utf8();
         Some((&token[..punct_len], &token[punct_len..]))
     } else {
