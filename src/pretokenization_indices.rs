@@ -69,13 +69,12 @@ fn contraction_len(bytes: &[u8], pos: usize) -> Option<usize> {
 }
 
 #[inline]
-fn next_char_at_ascii_fast(s: &str, bytes: &[u8], pos: usize) -> Option<(char, usize)> {
-    if pos >= bytes.len() { return None; }
-    let b = unsafe { *bytes.get_unchecked(pos) };
-    if b < 0x80 {
-        return Some((b as char, pos + 1));
-    }
-    // Fallback to standard decoding for non-ASCII
+fn next_char_at_ascii_fast(s: &str, _bytes: &[u8], pos: usize) -> Option<(char, usize)> {
+    // ASCII fast path disabled for now to benchmark its impact.
+    // Original fast path:
+    // if pos >= bytes.len() { return None; }
+    // let b = unsafe { *bytes.get_unchecked(pos) };
+    // if b < 0x80 { return Some((b as char, pos + 1)); }
     s.get(pos..).and_then(|tail| tail.chars().next().map(|ch| {
         let w = ch.len_utf8();
         (ch, pos + w)
