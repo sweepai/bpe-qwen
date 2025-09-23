@@ -1004,28 +1004,35 @@ fn split_mixed_whitespace_indices(text: &str, end_indices: &[usize]) -> Vec<usiz
     let mut prev_end = 0usize;
     for &end in end_indices {
         let tok = &text[prev_end..end];
-        let is_ws_no_nl = !tok.contains('\n') && !tok.contains('\r') && tok.chars().all(|c| c.is_whitespace());
-        if is_ws_no_nl {
-            // If whitespace token mixes different kinds (e.g., ' ' + '\t' or ' ' + NBSP),
-            // split off the final codepoint as its own token. This mirrors how the string
-            // tokenizer handles donation using the last character while keeping the rest.
-            let mut distinct: Option<char> = None;
-            let mut mixed = false;
-            let mut last_char: Option<char> = None;
-            for ch in tok.chars() {
-                last_char = Some(ch);
-                if let Some(first) = distinct {
-                    if ch != first { mixed = true; }
+        // Fast ASCII-only path: check by bytes to avoid repeated Unicode iteration
+        let bytes = tok.as_bytes();
+        let mut ascii_only = true;
+        let mut is_ws_no_nl_ascii = true;
+        let mut has_crlf = false;
+        let mut first_kind: i8 = -1; // 0=space,1=tab,2=VT,3=FF
+        let mut mixed_ascii = false;
+        let mut last_byte: u8 = 0;
+        for &b in bytes {
+            if b < 0x80 {
+                // classify ASCII
+                if b == b'\n' || b == b'\r' { has_crlf = true; break; }
+                let kind = match b { b' ' => 0, b'\t' => 1, 0x0B => 2, 0x0C => 3, _ => { is_ws_no_nl_ascii = false; 4 } };
+                if kind != 4 { // it's horizontal ws (no CR/LF)
+                    if first_kind == -1 { first_kind = kind; } else if kind != first_kind { mixed_ascii = true; }
                 } else {
-                    distinct = Some(ch);
+                    // not whitespace
+                    is_ws_no_nl_ascii = false;
                 }
-            }
+                last_byte = b;
+            } else { ascii_only = false; break; }
+        }
 
-            if mixed {
-                if let Some(last) = last_char {
-                    let split_at = end - last.len_utf8();
-                    // Push the prefix (all but last char), then the last char
-                    if split_at > prev_end { out.push(split_at); }
+        if ascii_only {
+            if is_ws_no_nl_ascii && !has_crlf {
+                // ASCII whitespace-only token
+                if mixed_ascii {
+                    // last byte is ASCII => split at end-1
+                    if end - 1 > prev_end { out.push(end - 1); }
                     out.push(end);
                 } else {
                     out.push(end);
@@ -1034,7 +1041,35 @@ fn split_mixed_whitespace_indices(text: &str, end_indices: &[usize]) -> Vec<usiz
                 out.push(end);
             }
         } else {
-            out.push(end);
+            // Non-ASCII present: fall back to precise Unicode checks (rare path)
+            let is_ws_no_nl = !tok.contains('\n') && !tok.contains('\r') && tok.chars().all(|c| c.is_whitespace());
+            if is_ws_no_nl {
+                // Detect mixing of different codepoints and capture the last char
+                let mut distinct: Option<char> = None;
+                let mut mixed = false;
+                let mut last_char: Option<char> = None;
+                for ch in tok.chars() {
+                    last_char = Some(ch);
+                    if let Some(first) = distinct {
+                        if ch != first { mixed = true; }
+                    } else {
+                        distinct = Some(ch);
+                    }
+                }
+                if mixed {
+                    if let Some(last) = last_char {
+                        let split_at = end - last.len_utf8();
+                        if split_at > prev_end { out.push(split_at); }
+                        out.push(end);
+                    } else {
+                        out.push(end);
+                    }
+                } else {
+                    out.push(end);
+                }
+            } else {
+                out.push(end);
+            }
         }
         prev_end = end;
     }
@@ -1067,24 +1102,32 @@ fn split_non_ascii_hspace_runs_indices(text: &str, end_indices: &[usize]) -> Vec
     while i < end_indices.len() {
         let end = end_indices[i];
         let tok = &text[prev_end..end];
-        let is_ws_no_nl = !tok.contains('\n') && !tok.contains('\r') && tok.chars().all(|c| c.is_whitespace());
-        let all_non_ascii_hspace = is_ws_no_nl && tok.chars().all(is_non_ascii_hspace);
+        // Quick ASCII rejection: if any ASCII byte is present, it cannot be all non-ASCII hspace
+        let has_any_ascii = tok.as_bytes().iter().any(|&b| b < 0x80);
+        let all_non_ascii_hspace = if has_any_ascii {
+            false
+        } else {
+            // Rare path: decode once to verify all are non-ASCII horizontal spaces without CR/LF
+            let mut ok = true;
+            for c in tok.chars() { if !is_non_ascii_hspace(c) { ok = false; break; } }
+            ok
+        };
 
         if all_non_ascii_hspace {
             // Extend through subsequent tokens that are also all non-ASCII hspace
             let mut j = i + 1;
             let mut last_end = end;
             let run_start = prev_end;
-            let mut run_ends: Vec<usize> = vec![end];
             while j < end_indices.len() {
                 let next_end = end_indices[j];
                 let next_tok = &text[last_end..next_end];
-                let is_ws_no_nl_next = !next_tok.contains('\n') && !next_tok.contains('\r')
-                    && next_tok.chars().all(|c| c.is_whitespace());
-                let all_non_ascii_next = is_ws_no_nl_next && next_tok.chars().all(is_non_ascii_hspace);
+                // Same ASCII fast rejection
+                let next_has_ascii = next_tok.as_bytes().iter().any(|&b| b < 0x80);
+                let all_non_ascii_next = if next_has_ascii { false } else {
+                    let mut ok = true; for c in next_tok.chars() { if !is_non_ascii_hspace(c) { ok = false; break; } } ok
+                };
                 if all_non_ascii_next {
                     last_end = next_end;
-                    run_ends.push(next_end);
                     j += 1;
                 } else {
                     break;
@@ -1092,14 +1135,20 @@ fn split_non_ascii_hspace_runs_indices(text: &str, end_indices: &[usize]) -> Vec
             }
             // Decide how to represent this run according to slow tokenizer behavior
             let run_slice = &text[run_start..last_end];
-            let mut uniq: Vec<char> = Vec::new();
+            // Track up to 2 unique codepoints and whether all are thinish
+            let mut uniq_count = 0u8;
+            let mut u1: char = '\0';
+            let mut u2: char = '\0';
+            let mut all_thin = true;
             for ch in run_slice.chars() {
-                if !uniq.contains(&ch) { uniq.push(ch); }
-                if uniq.len() > 8 { break; } // small cap; not expected to be large
+                if uniq_count == 0 { u1 = ch; uniq_count = 1; }
+                else if uniq_count == 1 { if ch != u1 { u2 = ch; uniq_count = 2; } }
+                else if ch != u1 && ch != u2 { uniq_count = 3; }
+                if all_thin { all_thin = is_thinish_space(ch); }
             }
 
-            if uniq.len() == 1 {
-                let ch = uniq[0];
+            if uniq_count == 1 {
+                let ch = u1;
                 if ch == '\u{2003}' { // EM SPACE: keep repeated EM SPACE as separate tokens
                     let mut cur = run_start;
                     for ch in run_slice.chars() {
@@ -1113,15 +1162,14 @@ fn split_non_ascii_hspace_runs_indices(text: &str, end_indices: &[usize]) -> Vec
                     out.push(last_end);
                 } else {
                     // Default for other non-ASCII spaces: preserve original tokenization
-                    out.extend(run_ends.into_iter());
+                    out.extend_from_slice(&end_indices[i..j]);
                 }
             } else {
                 // Mixed different codepoints: coalesce only if all are thin-ish; otherwise preserve
-                let all_thin = run_slice.chars().all(is_thinish_space);
                 if all_thin {
                     out.push(last_end);
                 } else {
-                    out.extend(run_ends.into_iter());
+                    out.extend_from_slice(&end_indices[i..j]);
                 }
             }
             // Advance i and prev_end
