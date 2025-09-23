@@ -1,5 +1,4 @@
 use crate::pretokenization::GLOBAL_QWEN_FAST_REGEX;
-use std::collections::HashMap;
 use unicode_general_category::{get_general_category, GeneralCategory};
 
 /// Determine if a character is horizontal whitespace excluding CR and LF
@@ -22,26 +21,28 @@ fn is_letter(c: char) -> bool {
         GeneralCategory::OtherLetter)
 }
 
-#[inline]
-fn is_letter_cached(c: char, cache: &mut HashMap<char, bool>) -> bool {
-    if let Some(&v) = cache.get(&c) { return v; }
-    let v = is_letter(c);
-    cache.insert(c, v);
-    v
-}
-
-#[inline]
-fn is_punct_cached(c: char, cache: &mut HashMap<char, bool>) -> bool {
-    !c.is_whitespace() && !is_letter_cached(c, cache) && !c.is_numeric()
-}
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum CharClass { Ws, Letter, Numeric, Other }
 
 #[inline]
-fn classify(c: char, cache: &mut HashMap<char, bool>) -> CharClass {
+fn classify(c: char) -> CharClass {
+    // ASCII fast-path
+    if c.is_ascii() {
+        if c.is_ascii_whitespace() { return CharClass::Ws; }
+        if c.is_ascii_alphabetic() { return CharClass::Letter; }
+        if c.is_ascii_digit() { return CharClass::Numeric; }
+        return CharClass::Other;
+    }
     if c.is_whitespace() { return CharClass::Ws; }
-    if is_letter_cached(c, cache) { return CharClass::Letter; }
+    // Match the regex \p{L} exactly using general category (faster than hashmap caching here)
+    if matches!(get_general_category(c),
+        GeneralCategory::UppercaseLetter |
+        GeneralCategory::LowercaseLetter |
+        GeneralCategory::TitlecaseLetter |
+        GeneralCategory::ModifierLetter |
+        GeneralCategory::OtherLetter) {
+        return CharClass::Letter;
+    }
     if c.is_numeric() { return CharClass::Numeric; }
     CharClass::Other
 }
@@ -68,7 +69,13 @@ fn contraction_len(bytes: &[u8], pos: usize) -> Option<usize> {
 }
 
 #[inline]
-fn next_char_at(s: &str, pos: usize) -> Option<(char, usize)> {
+fn next_char_at_ascii_fast(s: &str, bytes: &[u8], pos: usize) -> Option<(char, usize)> {
+    if pos >= bytes.len() { return None; }
+    let b = unsafe { *bytes.get_unchecked(pos) };
+    if b < 0x80 {
+        return Some((b as char, pos + 1));
+    }
+    // Fallback to standard decoding for non-ASCII
     s.get(pos..).and_then(|tail| tail.chars().next().map(|ch| {
         let w = ch.len_utf8();
         (ch, pos + w)
@@ -82,9 +89,6 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
     let len = bytes.len();
     let mut pos: usize = 0;
 
-    // Local cache to reduce repeated Unicode property checks
-    let mut letter_cache: HashMap<char, bool> = HashMap::with_capacity(256);
-
     while pos < len {
         // 1) Contractions: (?i:'s|'t|'re|'ve|'m|'ll|'d)
         if let Some(clen) = contraction_len(bytes, pos) {
@@ -94,15 +98,16 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         }
 
         // Current character
-        let (ch, next_pos1) = match next_char_at(text, pos) { Some(t) => t, None => break };
+        let (ch, next_pos1) = match next_char_at_ascii_fast(text, bytes, pos) { Some(t) => t, None => break };
+        let class_ch = classify(ch);
 
         // 2) [^\S\r\n]\p{L}+  (one hspace-not-CRLF + letters)
         if is_hspace_no_crlf(ch) {
-            if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if classify(nch, &mut letter_cache) == CharClass::Letter {
+            if let Some((nch, mut j)) = next_char_at_ascii_fast(text, bytes, next_pos1) {
+                if classify(nch) == CharClass::Letter {
                     while j < len {
-                        if let Some((c2, j2)) = next_char_at(text, j) {
-                            if classify(c2, &mut letter_cache) == CharClass::Letter { j = j2; } else { break; }
+                        if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
+                            if classify(c2) == CharClass::Letter { j = j2; } else { break; }
                         } else { break; }
                     }
                     ends.push(j);
@@ -113,22 +118,22 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         }
 
         // 3) [^\s\p{L}\p{N}]?\p{L}+
-        if classify(ch, &mut letter_cache) == CharClass::Letter {
+        if class_ch == CharClass::Letter {
             let mut j = next_pos1;
             while j < len {
-                if let Some((c2, j2)) = next_char_at(text, j) {
-                    if classify(c2, &mut letter_cache) == CharClass::Letter { j = j2; } else { break; }
+                if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
+                    if classify(c2) == CharClass::Letter { j = j2; } else { break; }
                 } else { break; }
             }
             ends.push(j);
             pos = j;
             continue;
-        } else if classify(ch, &mut letter_cache) == CharClass::Other {
-            if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if classify(nch, &mut letter_cache) == CharClass::Letter {
+        } else if class_ch == CharClass::Other {
+            if let Some((nch, mut j)) = next_char_at_ascii_fast(text, bytes, next_pos1) {
+                if classify(nch) == CharClass::Letter {
                     while j < len {
-                        if let Some((c2, j2)) = next_char_at(text, j) {
-                            if classify(c2, &mut letter_cache) == CharClass::Letter { j = j2; } else { break; }
+                        if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
+                            if classify(c2) == CharClass::Letter { j = j2; } else { break; }
                         } else { break; }
                     }
                     ends.push(j);
@@ -147,15 +152,15 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
 
         // 5)  ?[^\s\p{L}\p{N}]+[\r\n]*
         if ch == ' ' {
-            if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if classify(nch, &mut letter_cache) == CharClass::Other {
+            if let Some((nch, mut j)) = next_char_at_ascii_fast(text, bytes, next_pos1) {
+                if classify(nch) == CharClass::Other {
                     while j < len {
-                        if let Some((c2, j2)) = next_char_at(text, j) {
-                            if classify(c2, &mut letter_cache) == CharClass::Other { j = j2; } else { break; }
+                        if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
+                            if classify(c2) == CharClass::Other { j = j2; } else { break; }
                         } else { break; }
                     }
                     while j < len {
-                        if let Some((c2, j2)) = next_char_at(text, j) {
+                        if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                             if c2 == '\r' || c2 == '\n' { j = j2; } else { break; }
                         } else { break; }
                     }
@@ -165,15 +170,15 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
                 }
             }
         }
-        if classify(ch, &mut letter_cache) == CharClass::Other {
+        if class_ch == CharClass::Other {
             let mut j = next_pos1;
             while j < len {
-                if let Some((c2, j2)) = next_char_at(text, j) {
-                    if classify(c2, &mut letter_cache) == CharClass::Other { j = j2; } else { break; }
+                if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
+                    if classify(c2) == CharClass::Other { j = j2; } else { break; }
                 } else { break; }
             }
             while j < len {
-                if let Some((c2, j2)) = next_char_at(text, j) {
+                if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                     if c2 == '\r' || c2 == '\n' { j = j2; } else { break; }
                 } else { break; }
             }
@@ -193,7 +198,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
 
             // First consume initial newlines
             while j < len {
-                if let Some((c2, j2)) = next_char_at(text, j) {
+                if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                     if c2 == '\r' || c2 == '\n' {
                         j = j2;
                     } else {
@@ -208,7 +213,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
                 let whitespace_start = j;
                 // Consume whitespace (not CR/LF)
                 while j < len {
-                    if let Some((c2, j2)) = next_char_at(text, j) {
+                    if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                         if c2.is_whitespace() && c2 != '\r' && c2 != '\n' {
                             j = j2;
                         } else {
@@ -220,7 +225,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
                 // Check if we have newlines after the whitespace
                 let newline_start = j;
                 while j < len {
-                    if let Some((c2, j2)) = next_char_at(text, j) {
+                    if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                         if c2 == '\r' || c2 == '\n' {
                             j = j2;
                         } else {
@@ -250,7 +255,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
 
             // Scan ahead through whitespace to see if we hit a newline
             while j < len {
-                if let Some((c2, j2)) = next_char_at(text, j) {
+                if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                     if c2.is_whitespace() && c2 != '\r' && c2 != '\n' {
                         j = j2;
                     } else if c2 == '\r' || c2 == '\n' {
@@ -269,7 +274,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
 
                 // Consume all the initial whitespace
                 while j < len {
-                    if let Some((c2, j2)) = next_char_at(text, j) {
+                    if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                         if c2.is_whitespace() && c2 != '\r' && c2 != '\n' {
                             j = j2;
                         } else {
@@ -283,7 +288,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
                     // Consume newlines
                     let newline_start = j;
                     while j < len {
-                        if let Some((c2, j2)) = next_char_at(text, j) {
+                        if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                             if c2 == '\r' || c2 == '\n' {
                                 j = j2;
                             } else {
@@ -300,7 +305,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
                     // Now consume any whitespace (not CR/LF)
                     let whitespace_start = j;
                     while j < len {
-                        if let Some((c2, j2)) = next_char_at(text, j) {
+                        if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                             if c2.is_whitespace() && c2 != '\r' && c2 != '\n' {
                                 j = j2;
                             } else {
@@ -314,7 +319,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
                     let mut has_more_newlines = false;
                     let peek_pos = peek_j;
                     while peek_pos < len {
-                        if let Some((c2, _)) = next_char_at(text, peek_pos) {
+                        if let Some((c2, _)) = next_char_at_ascii_fast(text, bytes, peek_pos) {
                             if c2 == '\r' || c2 == '\n' {
                                 has_more_newlines = true;
                                 break;
@@ -341,7 +346,7 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         if ch.is_whitespace() && ch != '\r' && ch != '\n' {
             let mut j = next_pos1;
             while j < len {
-                if let Some((c2, j2)) = next_char_at(text, j) {
+                if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
                     if c2.is_whitespace() && c2 != '\r' && c2 != '\n' { j = j2; } else { break; }
                 } else { break; }
             }
