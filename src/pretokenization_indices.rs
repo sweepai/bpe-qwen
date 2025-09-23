@@ -101,6 +101,10 @@ fn next_char_at_ascii_fast(s: &str, _bytes: &[u8], pos: usize) -> Option<(char, 
 
 /// New: automaton implementation of QWEN_PATTERN_FAST that returns end indices only
 pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> {
+    // ASCII-only fast path: use byte-driven automaton when all bytes are ASCII
+    if text.is_ascii() {
+        return pretokenize_fast_single_pass_indices_automaton_ascii(text);
+    }
     let mut ends: Vec<usize> = Vec::with_capacity(text.len() / 4 + 8);
     let bytes = text.as_bytes();
     let len = bytes.len();
@@ -379,6 +383,216 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         // Safety net: consume current char as a token to avoid infinite loops
         ends.push(next_pos1);
         pos = next_pos1;
+    }
+
+    ends
+}
+
+#[inline(always)]
+fn ascii_is_letter(b: u8) -> bool { let lo = b | 0x20; lo >= b'a' && lo <= b'z' }
+#[inline(always)]
+fn ascii_is_digit(b: u8) -> bool { b >= b'0' && b <= b'9' }
+#[inline(always)]
+fn ascii_is_crlf(b: u8) -> bool { b == b'\n' || b == b'\r' }
+#[inline(always)]
+fn ascii_is_ws_any(b: u8) -> bool { b == b' ' || b == b'\t' || ascii_is_crlf(b) || b == 0x0B || b == 0x0C }
+#[inline(always)]
+fn ascii_is_ws_no_crlf(b: u8) -> bool { b == b' ' || b == b'\t' || b == 0x0B || b == 0x0C }
+#[inline(always)]
+fn ascii_is_other(b: u8) -> bool { b < 0x80 && !ascii_is_ws_any(b) && !ascii_is_letter(b) && !ascii_is_digit(b) }
+
+// Byte-driven automaton for ASCII-only inputs
+fn pretokenize_fast_single_pass_indices_automaton_ascii(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut pos: usize = 0;
+    let mut ends: Vec<usize> = Vec::with_capacity(len / 4 + 8);
+
+    while pos < len {
+        // 1) Contractions
+        if let Some(clen) = contraction_len(bytes, pos) {
+            ends.push(pos + clen);
+            pos += clen;
+            continue;
+        }
+
+        let b = unsafe { *bytes.get_unchecked(pos) };
+
+        // 2) [^\S\r\n]\p{L}+
+        if ascii_is_ws_no_crlf(b) {
+            let j1 = pos + 1;
+            if j1 < len {
+                let b1 = unsafe { *bytes.get_unchecked(j1) };
+                if ascii_is_letter(b1) {
+                    let mut j = j1 + 1;
+                    while j < len {
+                        let bj = unsafe { *bytes.get_unchecked(j) };
+                        if ascii_is_letter(bj) { j += 1; } else { break; }
+                    }
+                    ends.push(j);
+                    pos = j;
+                    continue;
+                }
+            }
+        }
+
+        // 3) [^\s\p{L}\p{N}]?\p{L}+
+        if ascii_is_letter(b) {
+            let mut j = pos + 1;
+            while j < len {
+                let bj = unsafe { *bytes.get_unchecked(j) };
+                if ascii_is_letter(bj) { j += 1; } else { break; }
+            }
+            ends.push(j);
+            pos = j;
+            continue;
+        } else if ascii_is_other(b) {
+            let j1 = pos + 1;
+            if j1 < len {
+                let b1 = unsafe { *bytes.get_unchecked(j1) };
+                if ascii_is_letter(b1) {
+                    let mut j = j1 + 1;
+                    while j < len {
+                        let bj = unsafe { *bytes.get_unchecked(j) };
+                        if ascii_is_letter(bj) { j += 1; } else { break; }
+                    }
+                    ends.push(j);
+                    pos = j;
+                    continue;
+                }
+            }
+        }
+
+        // 4) single numeric codepoint
+        if ascii_is_digit(b) {
+            let j = pos + 1;
+            ends.push(j);
+            pos = j;
+            continue;
+        }
+
+        // 5) ?[^\s\p{L}\p{N}]+[\r\n]* starting with space
+        if b == b' ' {
+            let j1 = pos + 1;
+            if j1 < len {
+                let b1 = unsafe { *bytes.get_unchecked(j1) };
+                if ascii_is_other(b1) {
+                    let mut j = j1 + 1;
+                    while j < len {
+                        let bj = unsafe { *bytes.get_unchecked(j) };
+                        if ascii_is_other(bj) { j += 1; } else { break; }
+                    }
+                    while j < len {
+                        let bj = unsafe { *bytes.get_unchecked(j) };
+                        if ascii_is_crlf(bj) { j += 1; } else { break; }
+                    }
+                    ends.push(j);
+                    pos = j;
+                    continue;
+                }
+            }
+        }
+
+        // General Other + optional CR/LF run
+        if ascii_is_other(b) {
+            let mut j = pos + 1;
+            while j < len {
+                let bj = unsafe { *bytes.get_unchecked(j) };
+                if ascii_is_other(bj) { j += 1; } else { break; }
+            }
+            while j < len {
+                let bj = unsafe { *bytes.get_unchecked(j) };
+                if ascii_is_crlf(bj) { j += 1; } else { break; }
+            }
+            ends.push(j);
+            pos = j;
+            continue;
+        }
+
+        // 6) \s*[\r\n]+
+        if ascii_is_crlf(b) {
+            let mut j = pos;
+            // consume initial newlines
+            while j < len {
+                let bj = unsafe { *bytes.get_unchecked(j) };
+                if ascii_is_crlf(bj) { j += 1; } else { break; }
+            }
+            loop {
+                let whitespace_start = j;
+                while j < len {
+                    let bj = unsafe { *bytes.get_unchecked(j) };
+                    if ascii_is_ws_no_crlf(bj) { j += 1; } else { break; }
+                }
+                let newline_start = j;
+                while j < len {
+                    let bj = unsafe { *bytes.get_unchecked(j) };
+                    if ascii_is_crlf(bj) { j += 1; } else { break; }
+                }
+                if j == newline_start { j = whitespace_start; break; }
+            }
+            ends.push(j);
+            pos = j;
+            continue;
+        }
+
+        // whitespace that precedes newlines
+        if ascii_is_ws_no_crlf(b) {
+            let mut j = pos;
+            let mut found_nl = false;
+            while j < len {
+                let bj = unsafe { *bytes.get_unchecked(j) };
+                if ascii_is_ws_no_crlf(bj) { j += 1; }
+                else if ascii_is_crlf(bj) { found_nl = true; break; }
+                else { break; }
+            }
+            if found_nl {
+                j = pos;
+                while j < len {
+                    let bj = unsafe { *bytes.get_unchecked(j) };
+                    if ascii_is_ws_no_crlf(bj) { j += 1; } else { break; }
+                }
+                loop {
+                    let newline_start = j;
+                    while j < len {
+                        let bj = unsafe { *bytes.get_unchecked(j) };
+                        if ascii_is_crlf(bj) { j += 1; } else { break; }
+                    }
+                    if j == newline_start { break; }
+                    let whitespace_start = j;
+                    while j < len {
+                        let bj = unsafe { *bytes.get_unchecked(j) };
+                        if ascii_is_ws_no_crlf(bj) { j += 1; } else { break; }
+                    }
+                    // peek for more newlines
+                    let mut has_more_nl = false;
+                    if j < len {
+                        let bj = unsafe { *bytes.get_unchecked(j) };
+                        if ascii_is_crlf(bj) { has_more_nl = true; }
+                    }
+                    if !has_more_nl { j = whitespace_start; break; }
+                }
+                ends.push(j);
+                pos = j;
+                continue;
+            }
+        }
+
+        // 7/8) non-CR/LF whitespace runs
+        if ascii_is_ws_no_crlf(b) {
+            let mut j = pos + 1;
+            while j < len {
+                let bj = unsafe { *bytes.get_unchecked(j) };
+                if ascii_is_ws_no_crlf(bj) { j += 1; } else { break; }
+            }
+            ends.push(j);
+            pos = j;
+            continue;
+        }
+
+        // fallback: consume one byte
+        let j = pos + 1;
+        ends.push(j);
+        pos = j;
     }
 
     ends
