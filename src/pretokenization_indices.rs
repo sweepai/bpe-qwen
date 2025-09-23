@@ -1,5 +1,41 @@
 use crate::pretokenization::GLOBAL_QWEN_FAST_REGEX;
 use unicode_general_category::{get_general_category, GeneralCategory};
+use std::time::Instant;
+
+/// Macro to conditionally enable timing logs for pretokenization
+/// Use with --features timing-logs to enable
+#[cfg(feature = "timing-logs")]
+macro_rules! time_step {
+    ($text:expr, $step_name:literal, $code:block) => {{
+        let start = Instant::now();
+        let result = $code;
+        if $text.len() > 1000 {
+            println!("pretokenize_fast_indices: {} took {:?}", $step_name, start.elapsed());
+        }
+        result
+    }};
+}
+
+#[cfg(not(feature = "timing-logs"))]
+macro_rules! time_step {
+    ($text:expr, $step_name:literal, $code:block) => {{
+        $code
+    }};
+}
+
+#[cfg(feature = "timing-logs")]
+macro_rules! time_total {
+    ($text:expr, $start:expr) => {
+        if $text.len() > 1000 {
+            println!("pretokenize_fast_indices: total time {:?}", $start.elapsed());
+        }
+    };
+}
+
+#[cfg(not(feature = "timing-logs"))]
+macro_rules! time_total {
+    ($text:expr, $start:expr) => {};
+}
 
 /// Determine if a character is horizontal whitespace excluding CR and LF
 #[inline]
@@ -924,15 +960,39 @@ fn merge_trailing_quote_indices(text: &str, end_indices: &[usize], quote: char) 
 /// Returns only end positions since start of next token = end of previous token
 /// Uses native multi-pass approach entirely in indices space for maximum efficiency
 pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
-    let initial = pretokenize_fast_single_pass_indices_automaton(text);
-    let split_ws = split_mixed_whitespace_indices(text, &initial);
+    #[cfg(feature = "timing-logs")]
+    let start_total = Instant::now();
+
+    let initial = time_step!(text, "initial automaton", {
+        pretokenize_fast_single_pass_indices_automaton(text)
+    });
+
+    let split_ws = time_step!(text, "split_mixed_whitespace", {
+        split_mixed_whitespace_indices(text, &initial)
+    });
+
     // Extra pass: split runs of non-ASCII horizontal whitespace (e.g., U+2003 EM SPACE)
     // into per-codepoint tokens, while preserving ASCII space/tab runs intact.
-    let split_non_ascii_ws = split_non_ascii_hspace_runs_indices(text, &split_ws);
-    let fixed   = fix_contractions_indices(text, &split_non_ascii_ws);
-    let fused   = fuse_hspace_indices(text, &fixed);
+    let split_non_ascii_ws = time_step!(text, "split_non_ascii_hspace_runs", {
+        split_non_ascii_hspace_runs_indices(text, &split_ws)
+    });
+
+    let fixed = time_step!(text, "fix_contractions", {
+        fix_contractions_indices(text, &split_non_ascii_ws)
+    });
+
+    let fused = time_step!(text, "fuse_hspace", {
+        fuse_hspace_indices(text, &fixed)
+    });
+
     // Do NOT merge double quotes in indices mode to match slow tokenizer behavior
-    let merged_single = merge_trailing_quote_indices(text, &fused, '\'');
+    let merged_single = time_step!(text, "merge_trailing_quote", {
+        merge_trailing_quote_indices(text, &fused, '\'')
+    });
+
+    #[cfg(feature = "timing-logs")]
+    time_total!(text, start_total);
+
     merged_single
 }
 

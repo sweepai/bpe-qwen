@@ -18,6 +18,12 @@ maturin develop
 
 # Release build (optimized, for performance testing)
 maturin develop --release
+
+# Development build with timing logs for pretokenization performance debugging
+maturin develop --features timing-logs
+
+# Release build with timing logs
+maturin develop --release --features timing-logs
 ```
 
 ### Test Commands
