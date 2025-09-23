@@ -924,7 +924,7 @@ fn merge_trailing_quote_indices(text: &str, end_indices: &[usize], quote: char) 
 /// Returns only end positions since start of next token = end of previous token
 /// Uses native multi-pass approach entirely in indices space for maximum efficiency
 pub fn pretokenize_fast_indices(text: &str) -> Vec<usize> {
-    let initial = pretokenize_fast_single_pass_indices(text);
+    let initial = pretokenize_fast_single_pass_indices_automaton(text);
     let split_ws = split_mixed_whitespace_indices(text, &initial);
     // Extra pass: split runs of non-ASCII horizontal whitespace (e.g., U+2003 EM SPACE)
     // into per-codepoint tokens, while preserving ASCII space/tab runs intact.
