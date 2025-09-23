@@ -47,6 +47,21 @@ fn classify(c: char) -> CharClass {
     CharClass::Other
 }
 
+#[inline]
+fn consume_ascii_letters(bytes: &[u8], mut j: usize, len: usize) -> usize {
+    // Fast path: advance over consecutive ASCII letters [A-Za-z]
+    while j < len {
+        // SAFETY: bounds checked by loop condition; using unchecked avoids redundant bounds checks
+        let b = unsafe { *bytes.get_unchecked(j) };
+        if b < 0x80 {
+            let lower = b | 0x20;
+            if lower >= b'a' && lower <= b'z' { j += 1; continue; }
+        }
+        break;
+    }
+    j
+}
+
 /// Case-insensitive check for a contraction token starting at byte position `pos`.
 /// Matches one of: 's, 't, 'm, 'd, 're, 've, 'll (ASCII-insensitive)
 #[inline]
@@ -70,11 +85,14 @@ fn contraction_len(bytes: &[u8], pos: usize) -> Option<usize> {
 
 #[inline]
 fn next_char_at_ascii_fast(s: &str, _bytes: &[u8], pos: usize) -> Option<(char, usize)> {
-    // ASCII fast path disabled for now to benchmark its impact.
-    // Original fast path:
-    // if pos >= bytes.len() { return None; }
-    // let b = unsafe { *bytes.get_unchecked(pos) };
-    // if b < 0x80 { return Some((b as char, pos + 1)); }
+    // Re-enable ASCII fast path: vastly reduces overhead in tight inner loops.
+    let bytes = s.as_bytes();
+    if pos >= bytes.len() { return None; }
+    // SAFETY: bounds checked just above; get_unchecked avoids redundant checks in hot path.
+    let b = unsafe { *bytes.get_unchecked(pos) };
+    if b < 0x80 {
+        return Some((b as char, pos + 1));
+    }
     s.get(pos..).and_then(|tail| tail.chars().next().map(|ch| {
         let w = ch.len_utf8();
         (ch, pos + w)
@@ -119,9 +137,11 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         // 3) [^\s\p{L}\p{N}]?\p{L}+
         if class_ch == CharClass::Letter {
             let mut j = next_pos1;
+            // ASCII-letter hot loop
+            j = consume_ascii_letters(bytes, j, len);
             while j < len {
                 if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
-                    if classify(c2) == CharClass::Letter { j = j2; } else { break; }
+                    if classify(c2) == CharClass::Letter { j = j2; j = consume_ascii_letters(bytes, j, len); } else { break; }
                 } else { break; }
             }
             ends.push(j);
@@ -130,9 +150,11 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         } else if class_ch == CharClass::Other {
             if let Some((nch, mut j)) = next_char_at_ascii_fast(text, bytes, next_pos1) {
                 if classify(nch) == CharClass::Letter {
+                    // ASCII-letter hot loop
+                    j = consume_ascii_letters(bytes, j, len);
                     while j < len {
                         if let Some((c2, j2)) = next_char_at_ascii_fast(text, bytes, j) {
-                            if classify(c2) == CharClass::Letter { j = j2; } else { break; }
+                            if classify(c2) == CharClass::Letter { j = j2; j = consume_ascii_letters(bytes, j, len); } else { break; }
                         } else { break; }
                     }
                     ends.push(j);
