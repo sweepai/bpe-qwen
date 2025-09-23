@@ -1,7 +1,6 @@
 use crate::pretokenization::GLOBAL_QWEN_FAST_REGEX;
-use crate::pretokenization::QWEN_PATTERN_FAST;
-use regex::Regex;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use unicode_general_category::{get_general_category, GeneralCategory};
 
 /// Determine if a character is horizontal whitespace excluding CR and LF
 #[inline]
@@ -15,11 +14,36 @@ fn is_punct(c: char) -> bool { !c.is_whitespace() && !is_letter(c) && !c.is_nume
 
 #[inline]
 fn is_letter(c: char) -> bool {
-    // Exact match for Unicode general category \p{L}
-    static LETTER_RE: OnceLock<Regex> = OnceLock::new();
-    let re = LETTER_RE.get_or_init(|| Regex::new(r"^\p{L}$").expect("compile letter regex"));
-    let mut buf = [0u8; 4];
-    re.is_match(c.encode_utf8(&mut buf))
+    matches!(get_general_category(c),
+        GeneralCategory::UppercaseLetter |
+        GeneralCategory::LowercaseLetter |
+        GeneralCategory::TitlecaseLetter |
+        GeneralCategory::ModifierLetter |
+        GeneralCategory::OtherLetter)
+}
+
+#[inline]
+fn is_letter_cached(c: char, cache: &mut HashMap<char, bool>) -> bool {
+    if let Some(&v) = cache.get(&c) { return v; }
+    let v = is_letter(c);
+    cache.insert(c, v);
+    v
+}
+
+#[inline]
+fn is_punct_cached(c: char, cache: &mut HashMap<char, bool>) -> bool {
+    !c.is_whitespace() && !is_letter_cached(c, cache) && !c.is_numeric()
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+enum CharClass { Ws, Letter, Numeric, Other }
+
+#[inline]
+fn classify(c: char, cache: &mut HashMap<char, bool>) -> CharClass {
+    if c.is_whitespace() { return CharClass::Ws; }
+    if is_letter_cached(c, cache) { return CharClass::Letter; }
+    if c.is_numeric() { return CharClass::Numeric; }
+    CharClass::Other
 }
 
 /// Case-insensitive check for a contraction token starting at byte position `pos`.
@@ -58,6 +82,9 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
     let len = bytes.len();
     let mut pos: usize = 0;
 
+    // Local cache to reduce repeated Unicode property checks
+    let mut letter_cache: HashMap<char, bool> = HashMap::with_capacity(256);
+
     while pos < len {
         // 1) Contractions: (?i:'s|'t|'re|'ve|'m|'ll|'d)
         if let Some(clen) = contraction_len(bytes, pos) {
@@ -72,10 +99,10 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         // 2) [^\S\r\n]\p{L}+  (one hspace-not-CRLF + letters)
         if is_hspace_no_crlf(ch) {
             if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if is_letter(nch) {
+                if classify(nch, &mut letter_cache) == CharClass::Letter {
                     while j < len {
                         if let Some((c2, j2)) = next_char_at(text, j) {
-                            if is_letter(c2) { j = j2; } else { break; }
+                            if classify(c2, &mut letter_cache) == CharClass::Letter { j = j2; } else { break; }
                         } else { break; }
                     }
                     ends.push(j);
@@ -86,22 +113,22 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         }
 
         // 3) [^\s\p{L}\p{N}]?\p{L}+
-        if is_letter(ch) {
+        if classify(ch, &mut letter_cache) == CharClass::Letter {
             let mut j = next_pos1;
             while j < len {
                 if let Some((c2, j2)) = next_char_at(text, j) {
-                    if is_letter(c2) { j = j2; } else { break; }
+                    if classify(c2, &mut letter_cache) == CharClass::Letter { j = j2; } else { break; }
                 } else { break; }
             }
             ends.push(j);
             pos = j;
             continue;
-        } else if is_punct(ch) {
+        } else if classify(ch, &mut letter_cache) == CharClass::Other {
             if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if is_letter(nch) {
+                if classify(nch, &mut letter_cache) == CharClass::Letter {
                     while j < len {
                         if let Some((c2, j2)) = next_char_at(text, j) {
-                            if is_letter(c2) { j = j2; } else { break; }
+                            if classify(c2, &mut letter_cache) == CharClass::Letter { j = j2; } else { break; }
                         } else { break; }
                     }
                     ends.push(j);
@@ -121,10 +148,10 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
         // 5)  ?[^\s\p{L}\p{N}]+[\r\n]*
         if ch == ' ' {
             if let Some((nch, mut j)) = next_char_at(text, next_pos1) {
-                if !nch.is_whitespace() && !is_letter(nch) && !nch.is_numeric() {
+                if classify(nch, &mut letter_cache) == CharClass::Other {
                     while j < len {
                         if let Some((c2, j2)) = next_char_at(text, j) {
-                            if !c2.is_whitespace() && !is_letter(c2) && !c2.is_numeric() { j = j2; } else { break; }
+                            if classify(c2, &mut letter_cache) == CharClass::Other { j = j2; } else { break; }
                         } else { break; }
                     }
                     while j < len {
@@ -138,11 +165,11 @@ pub fn pretokenize_fast_single_pass_indices_automaton(text: &str) -> Vec<usize> 
                 }
             }
         }
-        if is_punct(ch) {
+        if classify(ch, &mut letter_cache) == CharClass::Other {
             let mut j = next_pos1;
             while j < len {
                 if let Some((c2, j2)) = next_char_at(text, j) {
-                    if !c2.is_whitespace() && !is_letter(c2) && !c2.is_numeric() { j = j2; } else { break; }
+                    if classify(c2, &mut letter_cache) == CharClass::Other { j = j2; } else { break; }
                 } else { break; }
             }
             while j < len {
