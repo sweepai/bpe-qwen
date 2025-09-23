@@ -8,6 +8,7 @@ import json
 import sys
 import os
 import re
+import time
 from pathlib import Path
 import typer
 from tqdm import tqdm
@@ -29,23 +30,33 @@ def compare_automaton_vs_regex(text, text_name="text"):
         text_name (str): Name/description of the text for output
 
     Returns:
-        dict: Results from both methods and whether they match
+        dict: Results from both methods, timing info, and whether they match
     """
-    # Get regex results (expected)
+    # Time regex implementation
+    start_time = time.perf_counter()
     expected_indices = pretokenize_fast_single_pass_indices(text)
+    regex_time = time.perf_counter() - start_time
 
-    # Get automaton results (actual)
+    # Time automaton implementation
+    start_time = time.perf_counter()
     actual_indices = pretokenize_fast_single_pass_indices_automaton(text)
+    automaton_time = time.perf_counter() - start_time
 
     # Check if they match
     matches = expected_indices == actual_indices
+
+    # Calculate speedup
+    speedup = regex_time / automaton_time if automaton_time > 0 else float('inf')
 
     return {
         'expected_indices': expected_indices,
         'actual_indices': actual_indices,
         'matches': matches,
         'text_name': text_name,
-        'text': text
+        'text': text,
+        'regex_time': regex_time,
+        'automaton_time': automaton_time,
+        'speedup': speedup
     }
 
 
@@ -126,6 +137,7 @@ def analyze_automaton_vs_regex(result, verbose=False):
     else:
         if verbose:
             print(f"✅ {result['text_name']}: automaton matches regex implementation ({len(result['expected_indices'])} indices)")
+            print(f"   ⏱️  Timing: regex={result['regex_time']:.6f}s, automaton={result['automaton_time']:.6f}s, speedup={result['speedup']:.2f}x")
         return False
 
 
@@ -157,6 +169,11 @@ def load_and_test_jsonl(file_path, max_entries=0, verbose=False):
     mismatches = 0
     total_texts_tested = 0
 
+    # Speed tracking variables
+    total_regex_time = 0.0
+    total_automaton_time = 0.0
+    speedup_measurements = []
+
     # Fail fast - let file operations fail immediately if there are issues
     with open(file_path, 'r', encoding='utf-8') as f:
         # Use tqdm for progress tracking
@@ -184,10 +201,20 @@ def load_and_test_jsonl(file_path, max_entries=0, verbose=False):
                 prompt_mismatch = analyze_automaton_vs_regex(prompt_result, verbose=verbose)
                 total_texts_tested += 1
 
+                # Accumulate timing data
+                total_regex_time += prompt_result['regex_time']
+                total_automaton_time += prompt_result['automaton_time']
+                speedup_measurements.append(prompt_result['speedup'])
+
                 # Test completion
                 completion_result = compare_automaton_vs_regex(completion, f"entry {processed_entries + 1} completion")
                 completion_mismatch = analyze_automaton_vs_regex(completion_result, verbose=verbose)
                 total_texts_tested += 1
+
+                # Accumulate timing data
+                total_regex_time += completion_result['regex_time']
+                total_automaton_time += completion_result['automaton_time']
+                speedup_measurements.append(completion_result['speedup'])
 
                 entry_has_mismatch = prompt_mismatch or completion_mismatch
                 if entry_has_mismatch:
@@ -226,6 +253,33 @@ def load_and_test_jsonl(file_path, max_entries=0, verbose=False):
     else:
         print(f"⚠️  MISMATCHES FOUND: {mismatches} entries had automaton/regex implementation differences")
         print(f"Success rate: {((total_texts_tested - mismatches) / total_texts_tested * 100):.2f}%")
+
+    # Speed comparison summary
+    if speedup_measurements:
+        print(f"\n{'='*60}")
+        print(f"SPEED COMPARISON RESULTS")
+        print(f"{'='*60}")
+        print(f"Total regex time: {total_regex_time:.6f}s")
+        print(f"Total automaton time: {total_automaton_time:.6f}s")
+        overall_speedup = total_regex_time / total_automaton_time if total_automaton_time > 0 else float('inf')
+        print(f"Overall speedup: {overall_speedup:.2f}x")
+
+        # Calculate statistics
+        avg_speedup = sum(speedup_measurements) / len(speedup_measurements)
+        min_speedup = min(speedup_measurements)
+        max_speedup = max(speedup_measurements)
+
+        print(f"Average speedup per text: {avg_speedup:.2f}x")
+        print(f"Min speedup: {min_speedup:.2f}x")
+        print(f"Max speedup: {max_speedup:.2f}x")
+
+        # Performance interpretation
+        if overall_speedup > 1.0:
+            print(f"🚀 Automaton is {overall_speedup:.2f}x FASTER than regex implementation")
+        elif overall_speedup < 1.0:
+            print(f"🐌 Automaton is {1/overall_speedup:.2f}x SLOWER than regex implementation")
+        else:
+            print(f"⚖️  Automaton and regex have similar performance")
 
 
 def main(
