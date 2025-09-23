@@ -20,3 +20,10 @@ unicode-general-category = "0.6"
 
 # Use the local bpe crate from vendor
 bpe = { path = "vendor/rust-gems/crates/bpe", features = ["tiktoken", "rand"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug-assertions = false
+panic = "abort"

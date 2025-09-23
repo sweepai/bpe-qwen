@@ -11,7 +11,7 @@ fn is_hspace_no_crlf(c: char) -> bool {
 #[inline]
 fn is_punct(c: char) -> bool { !c.is_whitespace() && !is_letter(c) && !c.is_numeric() }
 
-#[inline]
+#[inline(always)]
 fn is_letter(c: char) -> bool {
     matches!(get_general_category(c),
         GeneralCategory::UppercaseLetter |
@@ -24,7 +24,7 @@ fn is_letter(c: char) -> bool {
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum CharClass { Ws, Letter, Numeric, Other }
 
-#[inline]
+#[inline(always)]
 fn classify(c: char) -> CharClass {
     // ASCII fast-path
     if c.is_ascii() {
@@ -47,7 +47,7 @@ fn classify(c: char) -> CharClass {
     CharClass::Other
 }
 
-#[inline]
+#[inline(always)]
 fn consume_ascii_letters(bytes: &[u8], mut j: usize, len: usize) -> usize {
     // Fast path: advance over consecutive ASCII letters [A-Za-z]
     while j < len {
@@ -64,7 +64,7 @@ fn consume_ascii_letters(bytes: &[u8], mut j: usize, len: usize) -> usize {
 
 /// Case-insensitive check for a contraction token starting at byte position `pos`.
 /// Matches one of: 's, 't, 'm, 'd, 're, 've, 'll (ASCII-insensitive)
-#[inline]
+#[inline(always)]
 fn contraction_len(bytes: &[u8], pos: usize) -> Option<usize> {
     if pos >= bytes.len() || bytes[pos] != b'\'' { return None; }
     let b1 = bytes.get(pos + 1).copied();
@@ -83,7 +83,7 @@ fn contraction_len(bytes: &[u8], pos: usize) -> Option<usize> {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn next_char_at_ascii_fast(s: &str, _bytes: &[u8], pos: usize) -> Option<(char, usize)> {
     // Re-enable ASCII fast path: vastly reduces overhead in tight inner loops.
     let bytes = s.as_bytes();
