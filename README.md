@@ -54,14 +54,14 @@ Performance comparison with HuggingFace tokenizers on WikiText dataset (2,891 te
 ### Sequential Performance:
 | Tokenizer | Speed | Speedup vs HF |
 |-----------|-------|---------------|
-| **bpe-qwen** | **5.01M tokens/sec** | **4.63x** |
-| HuggingFace | 1.08M tokens/sec | 1.00x |
+| **bpe-qwen** | **6.40M tokens/sec** | **6.28x** |
+| HuggingFace | 1.02M tokens/sec | 1.00x |
 
 ### Parallel Performance (8 workers):
 | Tokenizer | Speed | Speedup vs HF | Parallel Benefit |
 |-----------|-------|---------------|------------------|
-| **bpe-qwen** | **24.31M tokens/sec** | **9.16x** | **4.85x vs sequential** |
-| HuggingFace | 2.65M tokens/sec | 1.00x | 2.46x vs sequential |
+| **bpe-qwen** | **33.08M tokens/sec** | **12.52x** | **5.17x vs sequential** |
+| HuggingFace | 2.64M tokens/sec | 1.00x | 2.59x vs sequential |
 
 ✅ **Token consistency verified**: All methods produce identical 298,938 tokens
 
