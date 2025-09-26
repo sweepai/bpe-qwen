@@ -13,12 +13,8 @@ rm -rf dist/*
 PYTHON_VERSIONS="3.10 3.11 3.12"
 
 echo "Building macOS wheels..."
-# Build macOS x86_64 wheel
-echo "  Building macOS x86_64..."
-for py_ver in $PYTHON_VERSIONS; do
-    echo "    Python $py_ver"
-    maturin build --release --out dist --interpreter python$py_ver --target x86_64-apple-darwin || echo "    Warning: Python $py_ver not found for x86_64"
-done
+# Skip macOS x86_64 wheel due to cross-compilation issues
+echo "  Skipping macOS x86_64 (cross-compilation issues)..."
 
 # Build macOS ARM64 wheel (Apple Silicon)
 echo "  Building macOS ARM64..."

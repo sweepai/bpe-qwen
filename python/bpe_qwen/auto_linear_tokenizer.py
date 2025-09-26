@@ -287,9 +287,20 @@ class AutoLinearTokenizer(AutoTokenizer):
         if Path(pretrained_model_name_or_path).exists():
             model_dir = pretrained_model_name_or_path
         else:
-            # Download from HuggingFace Hub if needed
+            # Download from HuggingFace Hub if needed (tokenization files only)
             try:
-                model_dir = snapshot_download(pretrained_model_name_or_path)
+                model_dir = snapshot_download(
+                    pretrained_model_name_or_path,
+                    allow_patterns=[
+                        "*.json",           # config files, tokenizer.json
+                        "*.txt",            # vocab.txt, merges.txt
+                        "*.model",          # sentencepiece models
+                        "*.tiktoken",       # tiktoken files
+                        "*.py",             # tokenization_*.py files
+                        "README.md",        # documentation
+                        ".gitattributes"    # git attributes
+                    ]
+                )
             except Exception:
                 # If download fails, try using the parent class's resolution
                 # This might work for locally cached models
