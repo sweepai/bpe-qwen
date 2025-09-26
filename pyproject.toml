@@ -6,11 +6,15 @@ build-backend = "maturin"
 name = "bpe-qwen"
 description = "A blazing-fast BPE tokenizer for Qwen models, built with Rust. Achieves 5x faster tokenization with parallelism compared to HuggingFace tokenizers."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10,<3.13"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dynamic = ["version"]
 [project.optional-dependencies]
